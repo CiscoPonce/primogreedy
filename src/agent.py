@@ -1,100 +1,108 @@
-from typing import TypedDict
+import os
+from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
-
-# Import our tools
-from src.finance_tools import check_financial_health
-from src.search_tools import get_market_sentiment
+from langchain_core.messages import HumanMessage, SystemMessage
+import requests
 from src.llm import get_llm
-from langchain_core.messages import SystemMessage, HumanMessage
+from src.finance_tools import check_financial_health
 
-# 1. Define the "State" (The folder passing between workers)
+# --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
     ticker: str
-    financial_data: dict
-    news_data: str
-    final_report: str
-    status: str # 'PASS' or 'FAIL'
+    status: str
+    financial_data: Optional[dict]
+    final_report: Optional[str]
 
-# 2. NODE A: The Gatekeeper (Firewall)
-def financial_filter_node(state: AgentState):
-    ticker = state['ticker']
-    print(f"\n🚦 FILTER: Checking financials for {ticker}...")
+llm = get_llm()
+
+# --- 2. BRAVE SEARCH TOOL ---
+def brave_market_search(query: str):
+    """Fetches real-time market sentiment using Brave Search API."""
+    api_key = os.getenv("BRAVE_API_KEY")
+    if not api_key:
+        return "Brave API Key missing. Skipping web search."
     
-    # Run the firewall
-    health_result = check_financial_health(ticker)
-    
-    # Update the state
-    return {
-        "financial_data": health_result,
-        "status": health_result['status']
+    url = "https://api.search.brave.com/res/v1/web/search"
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": api_key
     }
+    params = {"q": f"{query} stock market news sentiment", "count": 5}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        results = response.json().get("web", {}).get("results", [])
+        snippets = [f"- {r['title']}: {r['description']}" for r in results]
+        return "\n".join(snippets) if snippets else "No recent news found."
+    except Exception as e:
+        return f"Search error: {str(e)}"
 
-# 3. NODE B: The Researcher (Search)
-def news_search_node(state: AgentState):
-    ticker = state['ticker']
-    print(f"\n🕵️ RESEARCH: Looking for news on {ticker}...")
-    
-    # Run the search
-    news = get_market_sentiment(ticker)
-    
-    return {"news_data": news}
+# --- 3. NODES ---
 
-# 4. NODE C: The Analyst (LLM)
-def report_writer_node(state: AgentState):
-    ticker = state['ticker']
-    news = state['news_data']
-    finances = state['financial_data']
+def check_health(state: AgentState):
+    """The Logic Firewall Node."""
+    ticker = state['ticker'].upper()
+    result = check_financial_health(ticker)
+    return {"financial_data": result, "status": result['status']}
+
+async def analyze_stock(state: AgentState):
+    """The AI Research Node (Now with Brave Search)."""
+    if state['status'] == "FAIL":
+        return state
+
+    ticker = state['ticker'].upper()
+    # Use Brave for real-time data
+    market_news = brave_market_search(ticker)
     
-    print(f"\n✍️ WRITER: Generating report for {ticker}...")
-    
-    # The Prompt
     prompt = f"""
-    You are a skeptical Wall Street Analyst. 
+    You are a professional stock analyst.
+    Analyze {ticker} based on these financials and real-time news.
     
-    Here is the financial data for {ticker}: {finances}
-    Here is the latest news: {news}
+    Financial Health: {state['financial_data']['reason']}
+    Recent Market Sentiment (via Brave): 
+    {market_news}
     
-    Task: Write a 3-sentence summary.
-    1. Start with "RECOMMENDATION: [BUY/SELL/HOLD]"
-    2. Explain the financial health (Debt/Cash).
-    3. Explain the news sentiment.
+    Provide a concise 'Recommendation' (BUY/HOLD/SELL) and a brief justification.
     """
     
-    # Call the Brain
-    llm = get_llm()
-    response = llm.invoke([HumanMessage(content=prompt)])
-    
+    response = await llm.ainvoke([SystemMessage(content="You are a skeptical analyst."), HumanMessage(content=prompt)])
     return {"final_report": response.content}
 
-# 5. Build the Graph (The Logic Flow)
+async def chat_mode(state: AgentState):
+    """The Conversational Node."""
+    prompt = [
+        SystemMessage(content="You are PrimoGreedy, a witty and skeptical financial assistant. Keep it brief."),
+        HumanMessage(content=state['ticker'])
+    ]
+    response = await llm.ainvoke(prompt)
+    return {"final_report": response.content, "status": "CHAT"}
+
+# --- 4. THE ROUTER ---
+def route_query(state: AgentState):
+    query = state['ticker'].strip().upper()
+    # Simple logic: If 1-5 chars and no spaces, it's likely a ticker
+    if 1 <= len(query) <= 5 and " " not in query:
+        return "financial_health_check"
+    return "chat_mode"
+
+# --- 5. BUILD THE GRAPH ---
 workflow = StateGraph(AgentState)
 
-# Add the workers
-workflow.add_node("filter", financial_filter_node)
-workflow.add_node("researcher", news_search_node)
-workflow.add_node("writer", report_writer_node)
+workflow.add_node("financial_health_check", check_health)
+workflow.add_node("analyst_research", analyze_stock)
+workflow.add_node("chat_mode", chat_mode)
 
-# Set the entry point
-workflow.set_entry_point("filter")
-
-# Add the "Conditional Edge" (The If/Else Logic)
-def check_pass_fail(state):
-    if state['status'] == 'FAIL':
-        return "end" # Stop immediately
-    return "continue"
-
-workflow.add_conditional_edges(
-    "filter",
-    check_pass_fail,
+workflow.set_conditional_entry_point(
+    route_query,
     {
-        "end": END,
-        "continue": "researcher"
+        "financial_health_check": "financial_health_check",
+        "chat_mode": "chat_mode"
     }
 )
 
-# Connect Researcher to Writer
-workflow.add_edge("researcher", "writer")
-workflow.add_edge("writer", END)
+workflow.add_edge("financial_health_check", "analyst_research")
+workflow.add_edge("analyst_research", END)
+workflow.add_edge("chat_mode", END)
 
-# Compile the machine
 app = workflow.compile()
+
