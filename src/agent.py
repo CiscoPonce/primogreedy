@@ -105,7 +105,3 @@ workflow.add_edge("analyst_research", END)
 workflow.add_edge("chat_mode", END)
 
 app = workflow.compile()
-
-
-git commit -m "Feat: Integrated Brave Search and Conversational Router"
-git push --force space main
