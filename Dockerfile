@@ -1,17 +1,23 @@
 # Use a lightweight Python version
 FROM python:3.11-slim
 
-# Set up the working directory
+# Set working directory
 WORKDIR /app
 
-# Copy the dependency list
+# Install system tools (curl/git) just in case
+RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
+
+# Copy the clean requirements first
 COPY requirements.txt .
 
-# Install the dependencies
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all your code into the container
+# Copy the rest of your app code
 COPY . .
 
-# Tell the container to listen on port 7860 (Hugging Face default)
-ENV PORT=7860
+# Expose the correct port for Hugging Face
+EXPOSE 7860
+
+# The Start Command (Using python -m is safer)
+CMD ["python", "-m", "chainlit", "run", "app.py", "--host", "0.0.0.0", "--port", "7860", "--headless"]
