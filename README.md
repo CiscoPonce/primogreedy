@@ -1,3 +1,21 @@
+---
+title: PrimoGreedy Agent
+emoji: 💸
+colorFrom: green
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
+# 🕵️‍♂️ PrimoGreedy Agent
+
+A financial analysis agent that protects you from bad stocks.
+It uses a **Logic Firewall** to reject high-debt and overvalued companies before using AI to analyze news.
+
+
+
+
 # PrimoAgent: Multi-Agent Stock Analysis
 
 ## Overview
