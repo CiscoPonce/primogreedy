@@ -1,24 +1,43 @@
+#model="z-ai/glm-4.5-air:free",
+
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
+# Load .env locally (This line does nothing on the cloud if .env is missing, which is fine)
 load_dotenv()
 
 def get_llm():
     """
     The Brain.
-    Connects to OpenRouter to use Llama 3 or Claude.
+    Connects to OpenRouter.
     """
+    # 1. Try to get the key
     api_key = os.getenv("OPENROUTER_API_KEY")
+    
+    # 2. Debugging Block (This prints to Hugging Face Logs)
     if not api_key:
-        raise ValueError("OPENROUTER_API_KEY not found in .env")
+        print("⚠️ CRITICAL ERROR: API Key is missing!")
+        print("---------------------------------------------------")
+        print("I looked for: 'OPENROUTER_API_KEY'")
+        print("But I only found these keys in the environment:")
+        # Print only the NAMES of the keys (safe), not the values
+        for key in os.environ.keys():
+            if "API" in key or "KEY" in key:
+                print(f" - {key}")
+        print("---------------------------------------------------")
+        raise ValueError("❌ OPENROUTER_API_KEY not found. Please check your Hugging Face Secrets.")
+    else:
+        # If it works, print a masked version to confirm
+        print(f"✅ API Key loaded successfully! (Starts with: {api_key[:8]}...)")
 
-    # We use ChatOpenAI because OpenRouter is compatible with it
+    # 3. Connect to the LLM
     llm = ChatOpenAI(
-        model="z-ai/glm-4.5-air:free", # Powerful & Cheap
-        openai_api_key=api_key,
-        openai_api_base="https://openrouter.ai/api/v1",
+        model="google/gemini-2.0-flash-lite-preview-02-05:free", # Using the faster/newer model
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
         temperature=0
     )
     
     return llm
+
