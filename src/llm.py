@@ -1,4 +1,5 @@
 #model="z-ai/glm-4.5-air:free",
+#"google/gemini-2.0-flash-lite-preview-02-05:free"
 
 import os
 from dotenv import load_dotenv
@@ -33,7 +34,7 @@ def get_llm():
 
     # 3. Connect to the LLM
     llm = ChatOpenAI(
-        model="google/gemini-2.0-flash-lite-preview-02-05:free", # Using the faster/newer model
+        model="z-ai/glm-4.5-air:free", 
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0
