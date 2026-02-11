@@ -2,8 +2,9 @@ chainlit
 langchain
 langchain-community
 langchain-core
+langchain-openai
 langgraph
 yfinance
 duckduckgo-search
-venice-py
 openai
+
