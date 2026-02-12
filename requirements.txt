@@ -8,3 +8,5 @@ yfinance
 duckduckgo-search
 openai
 requests
+matplotlib
+resend
