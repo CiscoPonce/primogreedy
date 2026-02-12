@@ -3,12 +3,13 @@ from typing import TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 import requests
+import yfinance as yf
 from src.llm import get_llm
 from src.finance_tools import check_financial_health
 from src.viz import get_stock_chart
 from src.email_utils import send_email_report
 
-# --- 1. STATE ---
+# --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
     ticker: str
     status: str
@@ -16,12 +17,12 @@ class AgentState(TypedDict):
     final_report: Optional[str]
     chart_data: Optional[Any]
     email_status: Optional[str]
+    insider_info: Optional[str]
 
 llm = get_llm()
 
-# ... (Keep imports and State definition) ...
-
 # --- 2. TOOLS ---
+
 def brave_market_search(query: str):
     """
     Uses Brave API to find real-time news.
@@ -46,13 +47,31 @@ def brave_market_search(query: str):
     except Exception as e:
         return f"Search Error: {str(e)}"
 
-# ... (Keep get_stock_chart and get_insider_activity) ...
+def get_insider_activity(ticker: str):
+    """Checks if insiders are selling."""
+    try:
+        stock = yf.Ticker(ticker)
+        # We look at the last 5 transactions
+        insiders = stock.insider_transactions
+        if insiders is None or insiders.empty:
+            return "No recent insider data available."
+        
+        # Get the latest 3 rows as a string
+        latest = insiders.head(3).to_string()
+        return f"Recent Insider Activity:\n{latest}"
+    except:
+        return "Could not retrieve insider data."
 
 # --- 3. NODES ---
 
-# ... (Keep check_health) ...
+def check_health(state: AgentState):
+    """The Logic Firewall Node."""
+    ticker = state['ticker'].upper()
+    result = check_financial_health(ticker)
+    return {"financial_data": result, "status": result['status']}
 
 async def analyze_stock(state: AgentState):
+    """The Research Node (LLM + Tools)."""
     # Standard Efficiency Check
     if state['status'] == "FAIL": return state
 
@@ -87,7 +106,7 @@ async def analyze_stock(state: AgentState):
     {insider_data}
     
     Task:
-    1. ignore generic news not related to {company_name}.
+    1. Ignore generic news not related to {company_name}.
     2. Synthesize the financial data with the news sentiment.
     3. Give a clear BUY, SELL, or HOLD recommendation.
     """
@@ -107,14 +126,19 @@ async def analyze_stock(state: AgentState):
         "email_status": email_result
     }
 
-# --- 4. ROUTER ---
+async def chat_mode(state: AgentState):
+    """The Conversational Node."""
+    response = await llm.ainvoke([HumanMessage(content=state['ticker'])])
+    return {"final_report": response.content, "status": "CHAT"}
+
+# --- 4. ROUTER & GRAPH ---
+
 def route_query(state: AgentState):
     query = state['ticker'].strip().upper()
     if 1 <= len(query) <= 5 and " " not in query:
         return "financial_health_check"
     return "chat_mode"
 
-# --- 5. GRAPH ---
 workflow = StateGraph(AgentState)
 workflow.add_node("financial_health_check", check_health)
 workflow.add_node("analyst_research", analyze_stock)
