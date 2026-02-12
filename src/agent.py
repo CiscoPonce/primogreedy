@@ -19,63 +19,93 @@ class AgentState(TypedDict):
 
 llm = get_llm()
 
+# ... (Keep imports and State definition) ...
+
 # --- 2. TOOLS ---
 def brave_market_search(query: str):
-    """Uses Brave API to find real-time news."""
+    """
+    Uses Brave API to find real-time news.
+    Now supports more specific queries to avoid 'IT' or 'AI' confusion.
+    """
     api_key = os.getenv("BRAVE_API_KEY")
     if not api_key: return "⚠️ Brave Key Missing."
     
     url = "https://api.search.brave.com/res/v1/web/search"
     headers = {"X-Subscription-Token": api_key}
-    params = {"q": f"{query} stock news sentiment", "count": 3}
+    
+    # We search for "Ticker + Stock + News" to be specific
+    params = {"q": f"{query} stock news analysis", "count": 5, "freshness": "pw"}
     
     try:
         data = requests.get(url, headers=headers, params=params).json()
         results = data.get("web", {}).get("results", [])
-        return "\n".join([f"- {r['title']}" for r in results])
+        
+        # We grab the Title AND the Description to give the LLM more context
+        snippets = [f"HEADLINE: {r['title']}\nSNIPPET: {r['description']}" for r in results]
+        return "\n\n".join(snippets)
     except Exception as e:
         return f"Search Error: {str(e)}"
 
+# ... (Keep get_stock_chart and get_insider_activity) ...
+
 # --- 3. NODES ---
-def check_health(state: AgentState):
-    ticker = state['ticker'].upper()
-    result = check_financial_health(ticker)
-    return {"financial_data": result, "status": result['status']}
+
+# ... (Keep check_health) ...
 
 async def analyze_stock(state: AgentState):
+    # Standard Efficiency Check
     if state['status'] == "FAIL": return state
 
     ticker = state['ticker'].upper()
     
-    # 1. Run Tools
-    news = brave_market_search(ticker)
-    chart = get_stock_chart(ticker)
+    # ---------------------------------------------------
+    # NEW: Get the Real Company Name for better Search
+    # ---------------------------------------------------
+    try:
+        stock = yf.Ticker(ticker)
+        company_name = stock.info.get('shortName') or stock.info.get('longName') or ticker
+    except:
+        company_name = ticker
+
+    # Search for "Gartner Inc" instead of just "IT"
+    search_query = f"{ticker} {company_name}"
+    market_news = brave_market_search(search_query)
     
-    # 2. AI Analysis
+    # Run other tools
+    chart_bytes = get_stock_chart(ticker)
+    insider_data = get_insider_activity(ticker)
+    
     prompt = f"""
-    Analyze {ticker}.
-    Financials: {state['financial_data']['reason']}
-    Real-Time News (Brave): {news}
+    Analyze {company_name} ({ticker}).
     
-    Give a recommendation (BUY/HOLD/SELL) and detailed reasoning.
+    Financial Health: {state['financial_data']['reason']}
+    
+    Real-Time News Search:
+    {market_news}
+    
+    Insider Trading Data:
+    {insider_data}
+    
+    Task:
+    1. ignore generic news not related to {company_name}.
+    2. Synthesize the financial data with the news sentiment.
+    3. Give a clear BUY, SELL, or HOLD recommendation.
     """
+    
     response = await llm.ainvoke([
         SystemMessage(content="You are PrimoGreedy. Sarcastic, skeptical, data-driven."), 
         HumanMessage(content=prompt)
     ])
     
-    # 3. Send Email (Only if it passed the firewall)
+    # Send Email
     email_result = send_email_report(ticker, response.content)
     
     return {
         "final_report": response.content, 
-        "chart_data": chart,
+        "chart_data": chart_bytes,
+        "insider_info": insider_data,
         "email_status": email_result
     }
-
-async def chat_mode(state: AgentState):
-    response = await llm.ainvoke([HumanMessage(content=state['ticker'])])
-    return {"final_report": response.content, "status": "CHAT"}
 
 # --- 4. ROUTER ---
 def route_query(state: AgentState):
