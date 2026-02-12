@@ -4,16 +4,23 @@ import resend
 def send_email_report(ticker: str, report: str):
     """
     Sends an email alert using Resend.
+    Supports multiple recipients (comma-separated).
     """
     api_key = os.getenv("RESEND_API_KEY")
-    target_email = os.getenv("TARGET_EMAIL") # We will set this in Hugging Face Secrets
+    target_email_str = os.getenv("TARGET_EMAIL") # This is a string "a@b.com,c@d.com"
 
-    if not api_key or not target_email:
+    if not api_key or not target_email_str:
         return "⚠️ Email skipped: Missing API Key or Target Email."
+
+    # ---------------------------------------------------------
+    # NEW LOGIC: Convert comma-string to a List of emails
+    # ---------------------------------------------------------
+    # 1. Split by comma
+    # 2. Strip whitespace (just in case you added spaces)
+    recipients = [email.strip() for email in target_email_str.split(",")]
 
     resend.api_key = api_key
 
-    # Format the email body (Convert newlines to HTML breaks)
     html_body = f"""
     <h1>PrimoGreedy Report: {ticker}</h1>
     <p><strong>Status:</strong> PASSED FIREWALL</p>
@@ -26,14 +33,14 @@ def send_email_report(ticker: str, report: str):
     """
 
     params = {
-        "from": "PrimoGreedy <onboarding@resend.dev>", # Default testing domain
-        "to": [target_email],
+        "from": "PrimoGreedy <onboarding@resend.dev>",
+        "to": recipients, # <--- Resend accepts a LIST here!
         "subject": f"💰 Trade Alert: {ticker} Analysis",
         "html": html_body
     }
 
     try:
         email = resend.Emails.send(params)
-        return f"📧 Email sent! (ID: {email.get('id')})"
+        return f"📧 Email sent to {len(recipients)} recipients! (ID: {email.get('id')})"
     except Exception as e:
         return f"⚠️ Email failed: {str(e)}"
