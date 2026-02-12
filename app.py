@@ -1,62 +1,75 @@
 import chainlit as cl
 from src.agent import app
+from src.social_scout import fetch_tickers_from_social
 
 @cl.on_chat_start
 async def start():
-    # Send a Welcome Message that lists your new powers
-    await cl.Message(content="👋 **PrimoGreedy v3.0**\n\n- **Brave Search** Active 🦁\n- **Resend Email** Active 📧\n- **Charts** Active 📈\n\n*Type a ticker (e.g., NVDA) to scout, or just say Hello.*").send()
+    await cl.Message(content="👋 **PrimoGreedy v5.0: Social Scout**\n\n- **Type a Ticker:** `NVDA`\n- **Type a List:** `AAPL, TSLA, MSFT`\n- **Scout an Account:** `@DeItaone` or `@unusual_whales`").send()
 
 @cl.on_message
 async def main(message: cl.Message):
     user_input = message.content.strip()
     
-    # Simple check: If it looks like a ticker, say "Scouting", otherwise "Thinking"
-    if len(user_input) <= 5 and " " not in user_input:
-        msg = cl.Message(content=f"🔍 Scouting **{user_input.upper()}**...")
-    else:
-        msg = cl.Message(content=f"🤔 Thinking...")
-    await msg.send()
+    # --- MODE 1: SOCIAL SCOUT (@handle) ---
+    if user_input.startswith("@"):
+        handle = user_input.replace("@", "")
+        msg = cl.Message(content=f"🕵️‍♂️ Scouting X (Twitter) for **@{handle}**...")
+        await msg.send()
+        
+        # Run the Scout Tool
+        tickers = await cl.make_async(fetch_tickers_from_social)(handle)
+        
+        if not tickers:
+            await cl.Message(content=f"❌ No valid stock tickers found in the last week for @{handle}.").send()
+            return
+            
+        await cl.Message(content=f"🎯 Targets Acquired: **{', '.join(tickers)}**\n*Starting Analysis Loop...*").send()
     
-    try:
-        # Run the full Agent (Brain + Eyes + Hands)
-        result = await app.ainvoke({"ticker": user_input})
+    # --- MODE 2: DIRECT INPUT ---
+    else:
+        # Split by comma or space
+        raw_list = user_input.replace(",", " ").split()
+        tickers = [t.upper() for t in raw_list if len(t) <= 5 and t.isalpha()]
         
-        # Extract all the new data we added
-        status = result.get('status')
-        report = result.get('final_report')
-        chart_bytes = result.get('chart_data')
-        email_msg = result.get('email_status')
+        if not tickers:
+            # It's just chat
+            tickers = [user_input]
 
-        # Prepare the Image (if we have one)
-        elements = []
-        if chart_bytes:
-            elements.append(cl.Image(content=chart_bytes, name="chart", display="inline"))
+    # --- EXECUTION LOOP ---
+    for ticker in tickers:
+        # Skip long conversational words if we are in batch mode
+        if len(ticker) > 5 and len(tickers) > 1: continue
 
-        # Format the Text Response
-        if status == "FAIL":
-            # Rejection (Firewall)
-            response = f"""
-            ❌ **REJECTED**: {result.get('financial_data', {}).get('reason')}
-            
-            *No email sent. No chart drawn.*
-            """
-        elif status == "PASS":
-            # Success (Analysis + Chart + Email)
-            response = f"""
-            ✅ **PASSED FIREWALL**
-            
-            {report}
-            
-            ---
-            **System Status:**
-            {email_msg if email_msg else "📧 Email not sent (Check keys)"}
-            """
-        else:
-            # Just Chatting
-            response = report
-
-        # Send everything to the UI
-        await cl.Message(content=response, elements=elements).send()
+        msg = cl.Message(content=f"🔍 Analyzing **{ticker}**...")
+        await msg.send()
         
-    except Exception as e:
-        await cl.Message(content=f"⚠️ Error: {str(e)}").send()
+        try:
+            result = await app.ainvoke({"ticker": ticker})
+            
+            status = result.get('status')
+            report = result.get('final_report')
+            chart_bytes = result.get('chart_data')
+            email_msg = result.get('email_status')
+
+            elements = []
+            if chart_bytes:
+                elements.append(cl.Image(content=chart_bytes, name=f"{ticker}_chart", display="inline"))
+
+            if status == "FAIL":
+                response = f"❌ **{ticker}: REJECTED**\n\nReason: {result.get('financial_data', {}).get('reason')}"
+            elif status == "PASS":
+                response = f"""
+                ✅ **{ticker}: PASSED**
+                
+                {report}
+                
+                ---
+                {email_msg if email_msg else "📧 Email check failed"}
+                """
+            else:
+                response = report
+
+            await cl.Message(content=response, elements=elements).send()
+            
+        except Exception as e:
+            await cl.Message(content=f"⚠️ Error on {ticker}: {str(e)}").send()
