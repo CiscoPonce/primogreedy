@@ -61,7 +61,7 @@ def fetch_tickers_from_social(handle: str):
     ignore_list = {
         "THE", "FOR", "AND", "WHO", "ARE", "YOU", "WHY", "NOT", "NEW", "CEO", "CFO", 
         "NOW", "BUY", "SELL", "LOW", "HIGH", "ATH", "ETF", "USA", "USD", "YTD", 
-        "CNBC", "NEWS", "REAL", "TIME", "TODAY", "LIVE", "DATA"
+        "CNBC", "NEWS", "REAL", "TIME", "TODAY", "LIVE", "DATA", "KRUZ"
     }
     unique_candidates = set([c for c in candidates if c not in ignore_list])
     
@@ -82,5 +82,4 @@ def fetch_tickers_from_social(handle: str):
                 valid_tickers.append(ticker)
         except:
             continue
-            
     return valid_tickers
