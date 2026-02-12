@@ -1,47 +1,60 @@
 import chainlit as cl
 from src.agent import app
 from src.social_scout import fetch_tickers_from_social
+from src.scanner import get_trending_stocks # <--- Import new tool
 
 @cl.on_chat_start
 async def start():
-    await cl.Message(content="👋 **PrimoGreedy v5.0: Social Scout**\n\n- **Type a Ticker:** `NVDA`\n- **Type a List:** `AAPL, TSLA, MSFT`\n- **Scout an Account:** `@DeItaone` or `@unusual_whales`").send()
+    welcome_msg = """
+    👋 **PrimoGreedy v6.0: Auto-Pilot**
+    
+    **Try these commands:**
+    1. `AUTO` -> 🧠 **Smart Scan** (Finds trending stocks & filters them)
+    2. `@Handle` -> 🕵️‍♂️ **Social Scout** (e.g., `@DeItaone`)
+    3. `NVDA` -> 🔎 **Single Scout**
+    """
+    await cl.Message(content=welcome_msg).send()
 
 @cl.on_message
 async def main(message: cl.Message):
-    user_input = message.content.strip()
+    user_input = message.content.strip().upper()
+    tickers = []
     
-    # --- MODE 1: SOCIAL SCOUT (@handle) ---
-    if user_input.startswith("@"):
-        handle = user_input.replace("@", "")
-        msg = cl.Message(content=f"🕵️‍♂️ Scouting X (Twitter) for **@{handle}**...")
-        await msg.send()
+    # --- MODE 1: AUTO-PILOT (The "Dummy Mode") ---
+    if user_input == "AUTO":
+        await cl.Message(content="📡 **Scanning Global Markets for Trends...**").send()
+        tickers = await cl.make_async(get_trending_stocks)()
         
-        # Run the Scout Tool
+        if not tickers:
+            await cl.Message(content="❌ Could not find trending data. Try again.").send()
+            return
+            
+        await cl.Message(content=f"🔥 **Hot List Detected:** {', '.join(tickers)}\n*Running Logic Firewall on all of them...*").send()
+
+    # --- MODE 2: SOCIAL SCOUT ---
+    elif user_input.startswith("@"):
+        handle = user_input.replace("@", "")
+        await cl.Message(content=f"🕵️‍♂️ Scouting **@{handle}**...").send()
         tickers = await cl.make_async(fetch_tickers_from_social)(handle)
         
         if not tickers:
-            await cl.Message(content=f"❌ No valid stock tickers found in the last week for @{handle}.").send()
+            await cl.Message(content=f"❌ No tickers found for @{handle}.").send()
             return
-            
-        await cl.Message(content=f"🎯 Targets Acquired: **{', '.join(tickers)}**\n*Starting Analysis Loop...*").send()
+        await cl.Message(content=f"🎯 Targets: **{', '.join(tickers)}**").send()
     
-    # --- MODE 2: DIRECT INPUT ---
+    # --- MODE 3: DIRECT INPUT ---
     else:
-        # Split by comma or space
         raw_list = user_input.replace(",", " ").split()
-        tickers = [t.upper() for t in raw_list if len(t) <= 5 and t.isalpha()]
-        
-        if not tickers:
-            # It's just chat
-            tickers = [user_input]
+        tickers = [t for t in raw_list if len(t) <= 5 and t.isalpha()]
+        if not tickers: tickers = [user_input] # Fallback for chat
 
     # --- EXECUTION LOOP ---
     for ticker in tickers:
-        # Skip long conversational words if we are in batch mode
+        # Skip chatty words
         if len(ticker) > 5 and len(tickers) > 1: continue
 
-        msg = cl.Message(content=f"🔍 Analyzing **{ticker}**...")
-        await msg.send()
+        # Visual Separation
+        await cl.Message(content=f"--- 🔎 **Checking {ticker}** ---").send()
         
         try:
             result = await app.ainvoke({"ticker": ticker})
@@ -56,15 +69,14 @@ async def main(message: cl.Message):
                 elements.append(cl.Image(content=chart_bytes, name=f"{ticker}_chart", display="inline"))
 
             if status == "FAIL":
-                response = f"❌ **{ticker}: REJECTED**\n\nReason: {result.get('financial_data', {}).get('reason')}"
+                # Concise Rejection
+                response = f"❌ **REJECTED**: {result.get('financial_data', {}).get('reason')}"
             elif status == "PASS":
+                # Full Report
                 response = f"""
-                ✅ **{ticker}: PASSED**
-                
+                ✅ **PASSED FIREWALL**
                 {report}
-                
-                ---
-                {email_msg if email_msg else "📧 Email check failed"}
+                \n*{email_msg if email_msg else '📧 Email failed'}*
                 """
             else:
                 response = report
