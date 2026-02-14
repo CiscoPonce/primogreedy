@@ -118,22 +118,29 @@ def run_global_hunt():
                 if not price: 
                     continue # Invalid ticker found by Regex
 
-                # The Value Filter
+               # The Value Filter
                 health = check_financial_health(ticker)
                 
-                # Filter: Must Pass Graham OR have Margin of Safety
                 if health['status'] == "PASS" or health.get('metrics', {}).get('margin_of_safety', 'N/A') != "N/A":
                     link = get_official_filing_link(ticker, region)
                     gems_found = True
                     
-                    # Highlight Margin of Safety in Green if positive
                     safety = health['metrics'].get('margin_of_safety', 'N/A')
                     color = "green" if "%" in str(safety) and "-" not in str(safety) else "black"
                     
+                    # 🟢 COSMETIC FIX: Smart Price Formatting
+                    raw_price = stock.info.get('currentPrice', 0)
+                    currency = stock.info.get('currency', 'USD')
+                    
+                    if region == "UK" and raw_price > 50: # Assuming penny stocks
+                        display_price = f"£{raw_price/100:.2f}"
+                    else:
+                        display_price = f"{raw_price} {currency}"
+
                     region_gems.append(f"""
                         <li style="margin-bottom: 10px;">
                             <b>{ticker}</b> ({stock.info.get('shortName', 'Unknown')})<br>
-                            Price: {price} {config['currency']}<br>
+                            Price: {display_price}<br> 
                             Verdict: {health['reason']}<br>
                             Safety Margin: <span style="color:{color}; font-weight:bold;">{safety}</span><br>
                             <a href="{link}">Verify at {config['gov_source']}</a>
