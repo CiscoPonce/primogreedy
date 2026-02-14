@@ -1,0 +1,32 @@
+name: Global Hunter Cron
+
+on:
+  schedule:
+    # Runs at 06:00 AM UTC daily
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Manual Button
+
+jobs:
+  global-hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install Dependencies
+        run: |
+          pip install yfinance resend python-dotenv
+          
+      - name: Run The Hunter
+        # 🟢 CRITICAL: Map your new Dual Secrets here
+        env:
+          RESEND_API_KEY_CISCO: ${{ secrets.RESEND_API_KEY_CISCO }}
+          EMAIL_CISCO: ${{ secrets.EMAIL_CISCO }}
+          RESEND_API_KEY_RAUL: ${{ secrets.RESEND_API_KEY_RAUL }}
+          EMAIL_RAUL: ${{ secrets.EMAIL_RAUL }}
+          # BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }} (If needed later)
+        run: python src/niche_hunter.py
