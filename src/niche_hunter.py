@@ -43,41 +43,43 @@ def brave_search_scout(query):
 
 def extract_tickers(text, region):
     """
-    Uses Regex to find stock patterns like $ABCD, (LON: ABC), or just CAPS.
-    Smartly applies the regional suffix.
+    Uses Regex to find stock patterns like $ABCD, (ABCD), (LON: ABC).
     """
     found_tickers = set()
     
-    # 1. Regex for CashTags (High Signal): $AAPL, $TSLA
+    # 1. Regex for CashTags: $AAPL
     cashtags = re.findall(r'\$([A-Za-z]{2,5})', text)
-    for t in cashtags:
-        found_tickers.add(t.upper())
+    found_tickers.update([t.upper() for t in cashtags])
 
-    # 2. Regex for Regional specific patterns (e.g., "LON:RR")
+    # 2. 🟢 NUEVO: Regex for Parentheses: (AAPL) o (TSLA)
+    # Evitamos falsos positivos comunes de 2 letras como (US), (UK), (EU)
+    parentheses = re.findall(r'\(([A-Z]{3,5})\)', text)
+    found_tickers.update(parentheses)
+
+    # 3. Regional Specifics
     if region == "UK":
         uk_tags = re.findall(r'LON:\s?([A-Za-z]{2,5})', text)
-        found_tickers.update(uk_tags)
+        found_tickers.update([t.upper() for t in uk_tags])
     elif region == "CANADA":
         ca_tags = re.findall(r'TSX:\s?([A-Za-z]{2,5})', text)
-        found_tickers.update(ca_tags)
+        found_tickers.update([t.upper() for t in ca_tags])
 
-    # 3. Clean and Normalize (Add .L, .TO, etc)
+    # 4. Clean and Normalize
     normalized = []
     suffix = MARKET_CONFIG[region]['suffix']
     
     for t in found_tickers:
         clean_t = t.strip().upper()
-        # Avoid common false positives
-        if clean_t in ["IPO", "CEO", "YTD", "USD", "GBP", "ETF", "THE", "FOR", "AND"]:
+        # Blacklist de palabras comunes que parecen tickers
+        if clean_t in ["IPO", "CEO", "YTD", "USD", "GBP", "EUR", "ETF", "EPS", "FYI", "AGM"]:
             continue
             
-        # Add suffix if missing
         if suffix and not clean_t.endswith(suffix):
             clean_t = f"{clean_t}{suffix}"
             
         normalized.append(clean_t)
         
-    return list(set(normalized)) # Remove duplicates
+    return list(set(normalized))
 
 # --- 2. MAIN EXECUTION LOOP ---
 def run_global_hunt():

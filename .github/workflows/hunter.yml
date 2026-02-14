@@ -19,14 +19,15 @@ jobs:
           
       - name: Install Dependencies
         run: |
-          pip install yfinance resend python-dotenv
+          pip install yfinance resend python-dotenv requests
           
       - name: Run The Hunter
-        # 🟢 CRITICAL: Map your new Dual Secrets here
+        # 🟢 Searching: 
         env:
           RESEND_API_KEY_CISCO: ${{ secrets.RESEND_API_KEY_CISCO }}
           EMAIL_CISCO: ${{ secrets.EMAIL_CISCO }}
           RESEND_API_KEY_RAUL: ${{ secrets.RESEND_API_KEY_RAUL }}
           EMAIL_RAUL: ${{ secrets.EMAIL_RAUL }}
-          # BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }} (If needed later)
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }} 
         run: PYTHONPATH=. python src/niche_hunter.py
+
