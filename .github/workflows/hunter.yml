@@ -29,4 +29,4 @@ jobs:
           RESEND_API_KEY_RAUL: ${{ secrets.RESEND_API_KEY_RAUL }}
           EMAIL_RAUL: ${{ secrets.EMAIL_RAUL }}
           # BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }} (If needed later)
-        run: python src/niche_hunter.py
+        run: PYTHONPATH=. python src/niche_hunter.py
