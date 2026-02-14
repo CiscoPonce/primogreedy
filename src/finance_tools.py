@@ -1,76 +1,105 @@
 import yfinance as yf
 
-def check_financial_health(ticker: str):
+# --- CONFIGURATION: SECTOR SPECIFIC RULES ---
+# Based on "Framework Profesional de Valoración Sectorial"
+SECTOR_CONFIG = {
+    "Financial Services": {
+        "debt_metric": "debtToEquity", 
+        "val_metric": "priceToBook", 
+        "debt_max": 3.0, # Banks carry high debt/equity naturally
+        "exclude_ebitda": True # Banks don't use EBITDA
+    },
+    "Real Estate": {
+        "debt_metric": "debtToEquity", 
+        "val_metric": "priceToBook", 
+        "debt_max": 2.5,
+        "exclude_ebitda": False 
+    },
+    "Technology": {
+        "debt_metric": "totalCash", 
+        "val_metric": "priceToFreeCashFlows", 
+        "debt_max": 100.0, # Placeholder, Tech prefers Net Cash
+        "exclude_ebitda": False
+    },
+    "Default": {
+        "debt_metric": "debtToEbitda", 
+        "val_metric": "forwardPE", 
+        "debt_max": 3.5, # > 3.5 is "Risk" per docs
+        "exclude_ebitda": False
+    }
+}
+
+def calculate_graham_number(info):
     """
-    The Logic Firewall (v2).
-    Analyzes:
-    1. Solvency (Debt/EBITDA, Capital Ratio) -> Safety
-    2. Valuation (P/E Ratio) -> Price
+    Classic Value Investing Formula: Sqrt(22.5 * EPS * BookValue)
+    Acts as a proxy for 'Intrinsic Value'.
     """
     try:
-        print(f"🛡️  Firewall Checking: {ticker}...")
+        eps = info.get('trailingEps', 0)
+        bvps = info.get('bookValue', 0)
+        if eps is not None and bvps is not None and eps > 0 and bvps > 0:
+            return (22.5 * eps * bvps) ** 0.5
+    except:
+        pass
+    return 0
+
+def check_financial_health(ticker):
+    """
+    The 'Graham & Buffett' Gatekeeper.
+    """
+    try:
         stock = yf.Ticker(ticker)
-        info = stock.info
+        # Fast info is faster, but 'info' has the deep balance sheet data we need
+        info = stock.info 
         
-        # --- 1. SOLVENCY CHECKS (The Safety Net) ---
-        sector = info.get('sector', 'Unknown')
-        industry = info.get('industry', 'Unknown')
+        sector = info.get('sector', 'Default')
+        config = SECTOR_CONFIG.get(sector, SECTOR_CONFIG['Default'])
         
-        # Banks
-        if "Financial" in sector and "Bank" in industry:
-            total_assets = info.get('totalAssets', 0)
-            total_equity = info.get('totalStockholderEquity', 0)
-            if total_assets > 0:
-                capital_ratio = (total_equity / total_assets) * 100
-                if capital_ratio < 8.0:
-                     return {"status": "FAIL", "reason": f"Bank Capital too low: {capital_ratio:.2f}% (<8%)"}
+        reasons = []
+        
+        # --- 1. GRAHAM'S SOLVENCY CHECK (The Safety Net) ---
+        # Current Ratio > 1.0 (Can they pay short-term bills?)
+        current_ratio = info.get('currentRatio')
+        if current_ratio and current_ratio < 1.0:
+            return {"status": "FAIL", "reason": f"Graham Reject: Liquidity Crisis (Current Ratio {current_ratio} < 1.0)"}
 
-        # Real Estate
-        elif "Real Estate" in sector:
-            total_debt = info.get('totalDebt', 0)
-            total_assets = info.get('totalAssets', 0)
-            if total_assets > 0:
-                ltv = (total_debt / total_assets) * 100
-                if ltv > 60.0:
-                    return {"status": "FAIL", "reason": f"LTV too high: {ltv:.2f}% (>60%)"}
-
-        # Standard Companies (Debt/EBITDA)
-        else:
-            ebitda = info.get('ebitda', 0)
-            total_debt = info.get('totalDebt', 0)
-            cash = info.get('totalCash', 0)
-            net_debt = total_debt - cash
+        # --- 2. SECTOR SPECIFIC DEBT CHECK ---
+        # If it's NOT a bank, we check Debt/EBITDA
+        if not config['exclude_ebitda']:
+            ebitda = info.get('ebitda')
+            debt = info.get('totalDebt')
+            cash = info.get('totalCash')
             
-            # Check if they are losing money
-            if ebitda <= 0:
-                 return {"status": "FAIL", "reason": "Company is losing money (Negative EBITDA)"}
-            
-            # Only check leverage if they actually have Net Debt
-            if net_debt > 0:
-                leverage = net_debt / ebitda
-                if leverage > 4.0: # Relaxed slightly to 4.0x for modern markets
-                    return {"status": "FAIL", "reason": f"Debt/EBITDA Dangerous: {leverage:.2f}x (>4.0x)"}
+            if ebitda and debt and ebitda > 0:
+                net_debt_ebitda = (debt - cash) / ebitda
+                if net_debt_ebitda > config['debt_max']:
+                    return {"status": "FAIL", "reason": f"Sector Reject: Debt/EBITDA {round(net_debt_ebitda, 2)}x > {config['debt_max']}x"}
 
-        # --- 2. VALUATION CHECK (The "Price" Filter) ---
-        # This is the NEW section!
-        pe_ratio = info.get('trailingPE')
-        forward_pe = info.get('forwardPE')
+        # --- 3. INTRINSIC VALUE CALCULATION ---
+        intrinsic_val = calculate_graham_number(info)
+        current_price = info.get('currentPrice', 0)
         
-        # Use Forward P/E if Trailing is missing (common for growth stocks)
-        final_pe = pe_ratio if pe_ratio is not None else forward_pe
+        margin_of_safety = 0
+        if intrinsic_val > 0 and current_price > 0:
+            margin_of_safety = (intrinsic_val - current_price) / intrinsic_val * 100
+
+        # Pass specific metrics to the Agent for the final report
+        metrics = {
+            "sector": sector,
+            "current_price": current_price,
+            "intrinsic_value": round(intrinsic_val, 2),
+            "margin_of_safety": round(margin_of_safety, 1),
+            "debt_to_equity": info.get('debtToEquity', 'N/A'),
+            "return_on_equity": info.get('returnOnEquity', 'N/A'),
+            "free_cash_flow": info.get('freeCashflow', 'N/A')
+        }
+
+        return {
+            "status": "PASS", 
+            "reason": f"Solvent. Sector: {sector}. Margin of Safety: {metrics['margin_of_safety']}%",
+            "metrics": metrics
+        }
         
-        if final_pe is None:
-            # If NO P/E exists, it usually means no earnings (Risk!)
-            return {"status": "FAIL", "reason": "Valuation Unknown (No P/E Ratio found - likely unprofitable)"}
-        
-        if final_pe > 60.0:
-            return {"status": "FAIL", "reason": f"Stock is too expensive! P/E: {final_pe:.2f} (>60x)"}
-
-        if final_pe < 0:
-             return {"status": "FAIL", "reason": f"Company is losing money! P/E is negative."}
-
-        # If it passed all checks:
-        return {"status": "PASS", "reason": f"Healthy! Leverage Safe & P/E Reasonable ({final_pe:.2f}x)"}
-
     except Exception as e:
-        return {"status": "ERROR", "reason": str(e)}
+        # If data fails, we default to PASS but warn the agent
+        return {"status": "PASS", "reason": f"Data Warning: {str(e)}", "metrics": {}}
