@@ -10,13 +10,47 @@ load_dotenv()
 
 # --- MOCK DATA FOR TESTING (Replace with Reddit API later) ---
 def scan_community_for_tickers(subreddit_name):
-    mock_trending = {
-        "pennystocks": ["PLTR", "SOFI", "RKLB"], # USA
-        "UKInvesting": ["RR", "BARC", "LLOY"],   # UK 
-        "CanadianInvestor": ["SU", "SHOP", "BB"], # Canada
-        "ASX_Bets": ["BHP", "FMG", "PLS"]        # Australia
+    """
+    TEMPORARY: A curated 'Watchlist' of interesting Small/Mid Caps 
+    to test the Graham Logic while we wait for Real-Time API integration.
+    """
+    
+    # These are NOT recommendations, but they are actual Small/Mid caps 
+    # often discussed in Value Investing circles.
+    
+    watchlist = {
+        # USA: Looking for Cash-Rich, Low Debt Niche players
+        "pennystocks": [
+            "PERI",  # Perion (AdTech, historically low P/E)
+            "INMD",  # InMode (MedTech, usually high cash, no debt)
+            "HZO",   # MarineMax (Consumer Cyclical, often deep value)
+            "ZUMZ"   # Zumiez (Retail, often trades near cash value)
+        ],
+        
+        # UK: The AIM Market & Undervalued Mid-Caps
+        "UKInvesting": [
+            "GAW.L",  # Games Workshop (High ROIC, Niche Moat - "Warhammer")
+            "IG.L",   # IG Group (Fintech, cash cow)
+            "DOT.L",  # Digital 9 (Digital Infra - often distressed/value play)
+            "BOO.L"   # Boohoo (Turnaround/Deep Value play?)
+        ],
+        
+        # CANADA: Tech & Resources (Non-Bank)
+        "CanadianInvestor": [
+            "CTS.TO", # Converge Tech (Roll-up strategy, mid-cap)
+            "LSPD.TO",# Lightspeed (Beaten down tech - potential value?)
+            "CG.TO",  # Centerra Gold (Mining - value play?)
+        ],
+        
+        # AUSTRALIA: Niche players
+        "ASX_Bets": [
+            "DDR.AX", # Dicker Data (High yield, family owned)
+            "JIN.AX", # Jumbo Interactive (Lottery resell, moat)
+            "CKF.AX"  # Collins Foods (KFC operator, steady cash)
+        ]
     }
-    return mock_trending.get(subreddit_name, [])
+    
+    return watchlist.get(subreddit_name, [])
 
 def run_global_hunt():
     print("🌍 Starting Global Hunter...")
