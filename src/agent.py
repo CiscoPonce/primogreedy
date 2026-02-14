@@ -91,9 +91,9 @@ async def analyze_stock(state: AgentState):
     HARD DATA INPUTS:
     - Sector: {sector}
     - Current Price: ${metrics.get('current_price')}
-    - Graham Intrinsic Value: ${graham_val}
-    - Margin of Safety (Calculated): {safety_margin}% (Target > 15%)
-    - Debt/Equity: {metrics.get('debt_to_equity')}
+    - Graham Intrinsic Value: ${graham_val} (Conservative)
+    - PEG Ratio (Growth Value): {metrics.get('peg_ratio')} (Target < 2.0 for Tech)
+    - Debt/Equity: {metrics.get('debt_to_equity')} (Note: Low % is Good)
     
     QUALITATIVE INPUTS (News & Search):
     {market_news}

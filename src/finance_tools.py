@@ -45,31 +45,35 @@ def calculate_graham_number(info):
 
 def check_financial_health(ticker):
     """
-    The 'Graham & Buffett' Gatekeeper.
+    The 'Graham & Buffett' Gatekeeper (Fixed for Percentage Bugs).
     """
     try:
         stock = yf.Ticker(ticker)
-        # Fast info is faster, but 'info' has the deep balance sheet data we need
         info = stock.info 
         
         sector = info.get('sector', 'Default')
         config = SECTOR_CONFIG.get(sector, SECTOR_CONFIG['Default'])
         
-        reasons = []
+        # --- FIX 1: FORMAT DEBT CORRECTLY ---
+        # yfinance returns 15.5 for 15.5%. We convert to decimal for math, but string for LLM.
+        debt_equity_raw = info.get('debtToEquity', 0)
+        debt_equity_str = f"{debt_equity_raw}%" if debt_equity_raw else "N/A"
         
-        # --- 1. GRAHAM'S SOLVENCY CHECK (The Safety Net) ---
-        # Current Ratio > 1.0 (Can they pay short-term bills?)
+        # --- FIX 2: ADD GROWTH VALUATION (PEG RATIO) ---
+        # For Tech, we look at PEG (Price/Earnings to Growth). 
+        # < 1.0 is Undervalued, < 2.0 is Fair for Quality.
+        peg_ratio = info.get('pegRatio', 'N/A')
+
+        # --- 1. GRAHAM'S SOLVENCY CHECK ---
         current_ratio = info.get('currentRatio')
         if current_ratio and current_ratio < 1.0:
             return {"status": "FAIL", "reason": f"Graham Reject: Liquidity Crisis (Current Ratio {current_ratio} < 1.0)"}
 
         # --- 2. SECTOR SPECIFIC DEBT CHECK ---
-        # If it's NOT a bank, we check Debt/EBITDA
         if not config['exclude_ebitda']:
             ebitda = info.get('ebitda')
             debt = info.get('totalDebt')
             cash = info.get('totalCash')
-            
             if ebitda and debt and ebitda > 0:
                 net_debt_ebitda = (debt - cash) / ebitda
                 if net_debt_ebitda > config['debt_max']:
@@ -79,27 +83,26 @@ def check_financial_health(ticker):
         intrinsic_val = calculate_graham_number(info)
         current_price = info.get('currentPrice', 0)
         
-        margin_of_safety = 0
+        margin_of_safety = "N/A"
         if intrinsic_val > 0 and current_price > 0:
-            margin_of_safety = (intrinsic_val - current_price) / intrinsic_val * 100
+            margin = (intrinsic_val - current_price) / intrinsic_val * 100
+            margin_of_safety = f"{round(margin, 1)}%"
 
-        # Pass specific metrics to the Agent for the final report
         metrics = {
             "sector": sector,
             "current_price": current_price,
             "intrinsic_value": round(intrinsic_val, 2),
-            "margin_of_safety": round(margin_of_safety, 1),
-            "debt_to_equity": info.get('debtToEquity', 'N/A'),
-            "return_on_equity": info.get('returnOnEquity', 'N/A'),
-            "free_cash_flow": info.get('freeCashflow', 'N/A')
+            "margin_of_safety": margin_of_safety,
+            "debt_to_equity": debt_equity_str, # Now has '%' symbol
+            "peg_ratio": peg_ratio,            # New Metric for Tech
+            "return_on_equity": f"{info.get('returnOnEquity', 0)*100:.2f}%" # Format as %
         }
 
         return {
             "status": "PASS", 
-            "reason": f"Solvent. Sector: {sector}. Margin of Safety: {metrics['margin_of_safety']}%",
+            "reason": f"Solvent. Sector: {sector}. Safety: {margin_of_safety}",
             "metrics": metrics
         }
         
     except Exception as e:
-        # If data fails, we default to PASS but warn the agent
         return {"status": "PASS", "reason": f"Data Warning: {str(e)}", "metrics": {}}
