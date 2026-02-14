@@ -52,13 +52,14 @@ def check_financial_health(ticker):
         sector = info.get('sector', 'Default')
         config = SECTOR_CONFIG.get(sector, SECTOR_CONFIG['Default'])
         
-        # --- 🟢 FIX: CURRENCY NORMALIZATION ---
+        # --- 🟢 FIX: FORCE UK CURRENCY NORMALIZATION ---
         current_price = info.get('currentPrice', 0)
         currency = info.get('currency', 'USD')
         
-        # Yahoo Finance often returns UK prices in GBX (Pennies)
-        # But financial ratios are usually in GBP. We must normalize.
-        if currency == "GBX": 
+        # Yahoo Finance often reports UK stocks (LSE) in Pence (GBX)
+        # But we need Pounds (GBP) to match the Intrinsic Value.
+        # Logic: If it ends in .L OR currency is GBX/GBp, divide by 100.
+        if ticker.endswith(".L") or currency == "GBp" or currency == "GBX":
             current_price = current_price / 100
         
         # --- 1. GRAHAM'S SOLVENCY CHECK ---
@@ -89,19 +90,18 @@ def check_financial_health(ticker):
         elif intrinsic_val == 0:
              margin_of_safety = "No Value (Unprofitable)"
 
-        # Formating Debt for display
+        # Format Debt for display
         debt_equity_raw = info.get('debtToEquity', 0)
         debt_equity_str = f"{debt_equity_raw}%" if debt_equity_raw else "N/A"
         
         metrics = {
             "sector": sector,
             "current_price": current_price,
-            "currency": currency, # Useful for debugging
+            "currency": currency,
             "intrinsic_value": round(intrinsic_val, 2),
             "margin_of_safety": margin_of_safety,
             "debt_to_equity": debt_equity_str,
-            "peg_ratio": info.get('pegRatio', 'N/A'),
-            "return_on_equity": f"{info.get('returnOnEquity', 0)*100:.2f}%" if info.get('returnOnEquity') else "N/A"
+            "peg_ratio": info.get('pegRatio', 'N/A')
         }
 
         return {
@@ -112,4 +112,3 @@ def check_financial_health(ticker):
         
     except Exception as e:
         return {"status": "PASS", "reason": f"Data Warning: {str(e)}", "metrics": {}}
-
