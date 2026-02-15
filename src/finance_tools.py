@@ -77,8 +77,7 @@ def check_financial_health(ticker):
                 net_debt_ebitda = (debt - cash) / ebitda
                 if net_debt_ebitda > config['debt_max']:
                     return {"status": "FAIL", "reason": f"Sector Reject: Debt/EBITDA {round(net_debt_ebitda, 2)}x > {config['debt_max']}x"}
-
-        # --- 3. INTRINSIC VALUE CALCULATION ---
+# --- 3. INTRINSIC VALUE CALCULATION ---
         intrinsic_val = calculate_graham_number(info)
         
         margin_of_safety = "N/A"
@@ -104,9 +103,17 @@ def check_financial_health(ticker):
             "peg_ratio": info.get('pegRatio', 'N/A')
         }
 
+        # 🟢 SMART VERDICT LOGIC 🟢
+        # If the company is technically solvent (has cash) but loses money (No Value),
+        # we flag it clearly in the Verdict so it matches the AI Analyst.
+        final_verdict = f"Solvent. Sector: {sector}."
+        
+        if intrinsic_val == 0:
+            final_verdict = f"Unprofitable (Avoid). Sector: {sector}."
+
         return {
             "status": "PASS", 
-            "reason": f"Solvent. Sector: {sector}.",
+            "reason": final_verdict, 
             "metrics": metrics
         }
         
