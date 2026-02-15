@@ -155,12 +155,38 @@ def run_global_hunt():
         else:
             report_html += f"<h2>📍 {region}</h2><p>Scouted {len(candidates)} tickers, but none met Graham's strict criteria.</p>"
 
-    # --- EMAIL DISPATCH ---
-    recipients = [os.getenv("EMAIL_CISCO"), os.getenv("EMAIL_JAMES")]
-    recipients = [r for r in recipients if r]
     
-    print(f"📧 Sending Agentic Report to: {recipients}")
-    send_email_report("Agentic Scout Report", report_html, recipients)
+# --- EMAIL DISPATCH ---
+    # We define a list of user profiles to ensure everyone gets a copy 
+    # using their own API key (High Reliability).
+    
+    users = [
+        {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},
+        {"name": "Raul", "email": os.getenv("EMAIL_RAUL"), "key": os.getenv("RESEND_API_KEY_RAUL")},
+        {"name": "David", "email": os.getenv("EMAIL_DAVID"), "key": os.getenv("RESEND_API_KEY_DAVID")} # 🟢 Welcome David!
+    ]
+
+    print(f"📧 Preparing Dispatch for {len(users)} agents...")
+
+    # We iterate through users. If they have credentials, we send the email.
+    for user in users:
+        if user["email"] and user["key"]:
+            print(f"   ↳ Sending to {user['name']}...")
+            try:
+                # We assume send_email_report takes (subject, html, recipient, api_key)
+                # If your current function only takes (subject, html, recipient), 
+                # we might need to verify src/email_utils.py. 
+                # Assuming standard usage based on previous setup:
+                send_email_report(
+                    subject="Agentic Scout Report", 
+                    html_content=report_html, 
+                    recipient=user["email"],
+                    api_key=user["key"] # 👈 Ensuring we use HIS key
+                )
+            except Exception as e:
+                print(f"   ❌ Failed to send to {user['name']}: {e}")
+        else:
+            print(f"   ⚠️ Skipping {user['name']} (Missing Credentials)")
 
 if __name__ == "__main__":
     run_global_hunt()
