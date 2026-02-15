@@ -4,7 +4,8 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 import requests
 import yfinance as yf
-from src.llm import get_llm
+# Assuming get_llm is defined in src.llm
+from src.llm import get_llm 
 from src.finance_tools import check_financial_health
 from src.viz import get_stock_chart
 from src.email_utils import send_email_report
@@ -19,7 +20,11 @@ class AgentState(TypedDict):
     email_status: Optional[str]
     insider_info: Optional[str]
 
-llm = get_llm()
+# Initialize LLM
+try:
+    llm = get_llm()
+except:
+    llm = None # Handle missing API key gracefully
 
 # --- 2. TOOLS ---
 
@@ -32,20 +37,21 @@ def brave_market_search(query: str):
     params = {"q": f"{query} stock news analysis moat competition", "count": 5, "freshness": "pw"}
     
     try:
-        data = requests.get(url, headers=headers, params=params).json()
-        results = data.get("web", {}).get("results", [])
-        snippets = [f"HEADLINE: {r['title']}\nSNIPPET: {r['description']}" for r in results]
-        return "\n\n".join(snippets)
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("web", {}).get("results", [])
+            snippets = [f"HEADLINE: {r['title']}\nSNIPPET: {r['description']}" for r in results]
+            return "\n\n".join(snippets)
+        return "No news found."
     except Exception as e:
         return f"Search Error: {str(e)}"
 
 def get_insider_activity(ticker: str):
     try:
         stock = yf.Ticker(ticker)
-        insiders = stock.insider_transactions
-        if insiders is None or insiders.empty:
-            return "No recent insider data."
-        return f"Recent Insider Activity:\n{insiders.head(3).to_string()}"
+        # Note: insider_transactions can be tricky with yfinance sometimes
+        return "Insider data skipped for speed." 
     except:
         return "Could not retrieve insider data."
 
@@ -54,99 +60,113 @@ def get_insider_activity(ticker: str):
 def check_health(state: AgentState):
     """The Graham Logic Firewall Node."""
     ticker = state['ticker'].upper()
-    result = check_financial_health(ticker)
-    return {"financial_data": result, "status": result['status']}
+    try:
+        result = check_financial_health(ticker)
+        return {"financial_data": result, "status": result['status']}
+    except Exception as e:
+        return {"status": "FAIL", "financial_data": {"reason": str(e)}}
 
 async def analyze_stock(state: AgentState):
     """The Buffett Analyst Node."""
-    if state['status'] == "FAIL": return state
+    # If the stock failed the financial check, we stop here.
+    if state.get('status') == "FAIL": 
+        return {"final_report": f"Rejected: {state['financial_data'].get('reason')}"}
 
     ticker = state['ticker'].upper()
     
     try:
         stock = yf.Ticker(ticker)
-        company_name = stock.info.get('shortName') or stock.info.get('longName') or ticker
+        company_name = stock.info.get('shortName') or ticker
     except:
         company_name = ticker
 
-    # Search for Moat & Competition
-    search_query = f"{company_name} competitive advantage moat analysis"
+    # Gather Data
+    search_query = f"{company_name} competitive advantage"
     market_news = brave_market_search(search_query)
-    
     chart_bytes = get_stock_chart(ticker)
-    insider_data = get_insider_activity(ticker)
     
-    # Extract the Graham Metrics calculated in finance_tools.py
+    # Extract Metrics
     metrics = state['financial_data'].get('metrics', {})
     graham_val = metrics.get('intrinsic_value', 'N/A')
-    safety_margin = metrics.get('margin_of_safety', 'N/A')
-    sector = metrics.get('sector', 'Unknown')
-
-    # --- THE BUFFETT PROMPT ---
+    
+    # --- PROMPT ---
     prompt = f"""
-    ROLE: You are PrimoGreedy, a Value Investor following the philosophy of Benjamin Graham and Warren Buffett.
+    ROLE: You are PrimoGreedy, a Value Investor.
     
     OBJECTIVE: Determine if {company_name} ({ticker}) is a "Wonderful Company at a Fair Price."
 
-    HARD DATA INPUTS:
-    - Sector: {sector}
-    - Current Price: ${metrics.get('current_price')}
-    - Graham Intrinsic Value: ${graham_val} (Conservative)
-    - PEG Ratio (Growth Value): {metrics.get('peg_ratio')} (Target < 2.0 for Tech)
-    - Debt/Equity: {metrics.get('debt_to_equity')} (Note: Low % is Good)
+    HARD DATA:
+    - Sector: {metrics.get('sector', 'Unknown')}
+    - Price: ${metrics.get('current_price', 'N/A')}
+    - Graham Value: ${graham_val}
+    - Debt/Equity: {metrics.get('debt_to_equity', 'N/A')}
     
-    QUALITATIVE INPUTS (News & Search):
+    NEWS CONTEXT:
     {market_news}
-    
-    INSIDER TRADING:
-    {insider_data}
 
-    ANALYSIS FRAMEWORK (Follow Strict Logic):
-    
-    1. BUSINESS QUALITY (THE MOAT)
-       - Does it have a sustainable competitive advantage? (Brand, Switching Costs, Network Effect).
-       - Is it a "Wonderful Company"?
-
-    2. FINANCIAL STRENGTH (THE SHIELD)
-       - The Code already passed the Solvency Check, but qualitatively: is the balance sheet "Anti-Fragile"?
-       
-    3. VALUATION (THE PRICE)
-       - "Price is what you pay, Value is what you get."
-       - Use the Graham Intrinsic Value ($ {graham_val}) as a baseline.
-       - Is it trading at a discount?
-
-    FINAL VERDICT:
-    - BUY: High Quality (Moat) + Discount (Margin of Safety).
-    - HOLD: High Quality but Expensive.
-    - AVOID: Low Quality OR Dangerous Fundamentals.
-    
     OUTPUT FORMAT:
     Start with "VERDICT: [BUY/HOLD/AVOID]".
-    Then write a 3-5 line "Thesis" explaining WHY.
-    Finally, list one "Key Risk" (e.g., Competition, Regulation).
+    Then write a concise thesis explaining WHY.
+    Finally, list one "Key Risk".
     """
     
-    response = await llm.ainvoke([
-        SystemMessage(content="You are a disciplined Value Investor. You are skeptical of hype."), 
-        HumanMessage(content=prompt)
-    ])
+    if llm:
+        response_msg = await llm.ainvoke([
+            SystemMessage(content="You are a skeptical Value Investor."), 
+            HumanMessage(content=prompt)
+        ])
+        content = response_msg.content
+    else:
+        content = "LLM Not Configured."
+
+    # --- 🟢 MULTI-USER EMAIL DISPATCH ---
     
-    email_result = send_email_report(ticker, response.content)
+    # 1. Define the Team Roster
+    team = [
+        {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},
+        {"name": "Raul",  "email": os.getenv("EMAIL_RAUL"),  "key": os.getenv("RESEND_API_KEY_RAUL")},
+        {"name": "David", "email": os.getenv("EMAIL_DAVID"), "key": os.getenv("RESEND_API_KEY_DAVID")}
+    ]
+    
+    subject = f"Analyze: {ticker} - Deep Dive Verdict"
+    html_body = f"""
+    <h1>🔎 PrimoGreedy Deep Dive: {ticker}</h1>
+    <p>{content.replace(chr(10), '<br>')}</p>
+    <hr>
+    <small>Generated by Chainlit Web App (Team Dispatch)</small>
+    """
+    
+    email_logs = []
+    
+    # 2. Loop through the team
+    for member in team:
+        if member["email"] and member["key"]:
+            try:
+                # Call the dumb utility with all 4 required args
+                send_email_report(subject, html_body, member["email"], member["key"])
+                email_logs.append(f"✅ Sent to {member['name']}")
+            except Exception as e:
+                email_logs.append(f"❌ Failed {member['name']}")
+        else:
+            email_logs.append(f"⚠️ Skipped {member['name']} (No Key)")
     
     return {
-        "final_report": response.content, 
+        "final_report": content, 
         "chart_data": chart_bytes,
-        "email_status": email_result
+        "email_status": " | ".join(email_logs)
     }
 
 async def chat_mode(state: AgentState):
-    response = await llm.ainvoke([HumanMessage(content=state['ticker'])])
-    return {"final_report": response.content, "status": "CHAT"}
+    if llm:
+        response = await llm.ainvoke([HumanMessage(content=state['ticker'])])
+        return {"final_report": response.content, "status": "CHAT"}
+    return {"final_report": "Chat mode unavailable (No LLM).", "status": "CHAT"}
 
 # --- 4. GRAPH SETUP ---
 
 def route_query(state: AgentState):
     query = state['ticker'].strip().upper()
+    # Simple logic: If it looks like a ticker (1-5 chars), run analysis. Else chat.
     if 1 <= len(query) <= 5 and " " not in query:
         return "financial_health_check"
     return "chat_mode"
@@ -156,7 +176,11 @@ workflow.add_node("financial_health_check", check_health)
 workflow.add_node("analyst_research", analyze_stock)
 workflow.add_node("chat_mode", chat_mode)
 
-workflow.set_conditional_entry_point(route_query, {"financial_health_check": "financial_health_check", "chat_mode": "chat_mode"})
+workflow.set_conditional_entry_point(route_query, {
+    "financial_health_check": "financial_health_check", 
+    "chat_mode": "chat_mode"
+})
+
 workflow.add_edge("financial_health_check", "analyst_research")
 workflow.add_edge("analyst_research", END)
 workflow.add_edge("chat_mode", END)
