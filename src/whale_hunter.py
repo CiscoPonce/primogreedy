@@ -16,7 +16,7 @@ from src.agent import brave_market_search
 # 📉 MICRO-CAP SETTINGS
 MAX_MARKET_CAP = 300_000_000   # Max: $300 Million
 MIN_MARKET_CAP = 10_000_000    # Min: $10 Million (Avoid shells)
-MAX_RETRIES = 2                # 2 Retries = 3 Total Attempts per region
+MAX_RETRIES = 1                # 2 Retries = 3 Total Attempts per region
 
 # --- 2. THE MEMORY ---
 class AgentState(TypedDict):
@@ -232,7 +232,7 @@ app = workflow.compile()
 # 🟢 EXECUTION BLOCK
 if __name__ == "__main__":
     print("🚀 Starting Micro-Cap Hunter (Senior Fixed Version)...")
-    regions = ["USA", "UK", "Canada", "Australia"]
+    regions = ["USA", "UK"]
     
     for market in regions:
         print(f"\n--- 🏁 Hunt: {market} ---")
@@ -242,3 +242,4 @@ if __name__ == "__main__":
             print(f"✅ {market} Complete.")
         except Exception as e:
             print(f"❌ Critical Error in {market}: {e}")
+
