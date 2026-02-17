@@ -9,12 +9,12 @@ on:
 jobs:
   global-hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 5  # 👈 MAKE SURE THIS IS HERE
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -26,7 +26,6 @@ jobs:
           pip list
           
       - name: Run The Hunter
-        # 🟢 Searching: 
         env:
           RESEND_API_KEY_CISCO: ${{ secrets.RESEND_API_KEY_CISCO }}
           EMAIL_CISCO: ${{ secrets.EMAIL_CISCO }}
@@ -34,9 +33,6 @@ jobs:
           EMAIL_RAUL: ${{ secrets.EMAIL_RAUL }}
           RESEND_API_KEY_DAVID: ${{ secrets.RESEND_API_KEY_DAVID }}
           EMAIL_DAVID: ${{ secrets.EMAIL_DAVID }}
-          # Shared Tools
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
-          # 👇 ADD THIS LINE HERE:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }} 
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: PYTHONPATH=. python src/whale_hunter.py
-
