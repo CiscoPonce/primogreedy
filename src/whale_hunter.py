@@ -204,10 +204,15 @@ workflow.add_node("email", email_node)
 workflow.set_entry_point("scout")
 
 def check_status(state):
-    if state['is_small_cap']: return "analyst"
-    if state['retry_count'] < MAX_RETRIES:
-        state['retry_count'] += 1
+    # If we found a gem, go to Analyst
+    if state['is_small_cap']: 
+        return "analyst"
+    
+    # If we failed but have retries left, Loop back
+    if state['retry_count'] <= MAX_RETRIES:
         return "scout"
+    
+    # If we ran out of retries, Give up
     return END
 
 workflow.add_edge("scout", "gatekeeper")
