@@ -16,10 +16,13 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+          cache: 'pip'
           
       - name: Install Dependencies
         run: |
-          pip install yfinance resend python-dotenv requests
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip list
           
       - name: Run The Hunter
         # 🟢 Searching: 
