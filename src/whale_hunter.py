@@ -192,7 +192,9 @@ def scout_node(state):
 
 def gatekeeper_node(state):
     """
-    🛡️ THE GATEKEEPER: Filters by market cap AND financial health.
+    🛡️ THE GATEKEEPER: Hard-filters on market cap only.
+    Financial health is collected as ADVISORY data for the analyst.
+    (Most micro-caps are unprofitable — a hard Graham gate rejects 95% of them.)
     """
     ticker = state['ticker']
     current_retries = state.get('retry_count', 0)
@@ -206,7 +208,7 @@ def gatekeeper_node(state):
             "retry_count": current_retries + 1
         }
 
-    # 2. Check Market Cap
+    # 2. Check Market Cap (HARD GATE — the only strict filter)
     print(f"   ⚖️ Weighing {ticker}...")
     try:
         stock = yf.Ticker(ticker)
@@ -225,20 +227,17 @@ def gatekeeper_node(state):
 
         print(f"   ✅ {ticker} Market Cap OK (${mkt_cap:,.0f})")
 
-        # 3. Financial Health Pre-Filter (saves expensive analyst LLM call)
-        print(f"   🧮 Running Graham health check on {ticker}...")
+        # 3. Financial Health — ADVISORY ONLY (no hard rejection)
+        print(f"   🧮 Collecting Graham health data for {ticker}...")
         health = check_financial_health(ticker)
-        if health.get('status') == 'FAIL':
-            print(f"   🚫 {ticker} Failed health check: {health.get('reason')}. Retry.")
-            return {
-                "market_cap": mkt_cap,
-                "is_small_cap": False,
-                "company_name": name,
-                "financial_data": health,
-                "retry_count": current_retries + 1
-            }
+        health_status = health.get('status', 'UNKNOWN')
+        health_reason = health.get('reason', 'N/A')
 
-        print(f"   ✅ {ticker} Passed health check. Forwarding to Analyst.")
+        if health_status == 'FAIL':
+            print(f"   ⚠️ {ticker} Graham flag: {health_reason} (passing to Analyst anyway)")
+        else:
+            print(f"   ✅ {ticker} Graham: {health_reason}")
+
         return {
             "market_cap": mkt_cap,
             "is_small_cap": True,
@@ -257,28 +256,52 @@ def gatekeeper_node(state):
 
 def analyst_node(state):
     """
-    🧠 THE ANALYST: Deep dive with Graham Logic + LLM.
-    Only reached if gatekeeper already approved market cap AND financial health.
+    🧠 THE ANALYST: Deep dive with LLM.
+    Receives both healthy AND unhealthy stocks — must evaluate turnaround plays.
     """
     ticker = state['ticker']
     fin_data = state.get('financial_data', {})
-    print(f"   🧠 Deep analysis of {ticker}...")
+    health_status = fin_data.get('status', 'UNKNOWN')
+    metrics = fin_data.get('metrics', {})
+    print(f"   🧠 Deep analysis of {ticker} (Health: {health_status})...")
 
     news = brave_market_search(f"{ticker} stock analysis")
 
+    # Build health context string for the prompt
+    if health_status == 'FAIL':
+        health_context = f"⚠️ GRAHAM FLAG: {fin_data.get('reason')}\nThis stock FAILED traditional Graham screening. Evaluate as a potential TURNAROUND PLAY."
+    else:
+        health_context = f"✅ GRAHAM PASS: {fin_data.get('reason')}"
+
     prompt = f"""
-    Analyze {state.get('company_name', ticker)} ({ticker}).
+    Analyze {state.get('company_name', ticker)} ({ticker}) as a Micro-Cap opportunity.
     Market Cap: ${state.get('market_cap', 0):,.0f}
-    Financials: {fin_data.get('metrics')}
-    Health: {fin_data.get('reason')}
-    News: {news}
-    Verdict: BUY / WATCH / AVOID.
+
+    FINANCIAL DATA:
+    {metrics}
+
+    HEALTH CHECK:
+    {health_context}
+
+    MARKET NEWS:
+    {news}
+
+    INSTRUCTIONS:
+    - Many micro-caps are pre-revenue or unprofitable. This is NORMAL.
+    - For unprofitable companies, evaluate: asset base, cash runway, insider ownership,
+      catalysts (e.g., drill results, FDA approvals, contract wins).
+    - Use Price-to-Book if Graham Number is unavailable (negative earnings).
+    - Be honest about risk but don't auto-reject turnaround plays.
+
+    OUTPUT:
+    VERDICT: BUY / WATCH / AVOID
     Thesis: 3 sentences max.
+    Key Risk: 1 sentence.
     """
 
     if llm:
         response = llm.invoke([
-            SystemMessage(content="You are Benjamin Graham."),
+            SystemMessage(content="You are a Value Investor specialising in micro-cap turnarounds."),
             HumanMessage(content=prompt)
         ])
         verdict = response.content
@@ -303,9 +326,9 @@ def email_node(state):
         subject = f"🧬 Micro-Cap Hunter: No Targets Found ({region})"
         html_body = f"""
         <h1>❌ Hunt Failed: {region}</h1>
-        <p>Scouted {MAX_RETRIES + 1} times but found no companies meeting the strict
-        Micro-Cap criteria (${MIN_MARKET_CAP/1e6:.0f}M – ${MAX_MARKET_CAP/1e6:.0f}M)
-        that also pass the Graham financial health check.</p>
+        <p>Scouted {MAX_RETRIES + 1} times but found no companies in the
+        Micro-Cap range (${MIN_MARKET_CAP/1e6:.0f}M – ${MAX_MARKET_CAP/1e6:.0f}M)
+        with valid market data.</p>
         <hr>
         <small>Agent: PrimoGreedy | {timestamp}</small>
         """
