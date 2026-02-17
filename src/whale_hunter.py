@@ -240,3 +240,20 @@ workflow.add_edge("email", END)
 # Compile
 app = workflow.compile()
 
+
+
+# 🟢 THE EXECUTION BLOCK )
+if __name__ == "__main__":
+    print("🚀 Starting Whale Hunter Agent (Sprint 7)...")
+    
+    try:
+        # Run the graph
+        # We pass an empty ticker to trigger the 'Scout Node' logic
+        result = app.invoke({"ticker": ""})
+        
+        print("✅ Mission Complete.")
+        print(f"Final Verdict: {result.get('final_verdict')}")
+        
+    except Exception as e:
+        print(f"❌ CRITICAL FAILURE: {str(e)}")
+
