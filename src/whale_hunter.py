@@ -86,29 +86,43 @@ def scout_node(state):
 def gatekeeper_node(state):
     """
     🛡️ THE STRICT GATEKEEPER
-    Rejects anything over $300M.
     """
     ticker = state['ticker']
-    if ticker == "NONE": return {"is_small_cap": False, "market_cap": 0}
+    current_retries = state.get('retry_count', 0) # Get current count
+    
+    # Fail-safe for "NONE" ticker
+    if ticker == "NONE": 
+        return {
+            "is_small_cap": False, 
+            "market_cap": 0,
+            "retry_count": current_retries + 1 # 👈 Increment on failure
+        }
 
     print(f"⚖️ Weighing {ticker}...")
     try:
         stock = yf.Ticker(ticker)
-        
-        # Get Market Cap
         mkt_cap = stock.info.get('marketCap', 0)
         name = stock.info.get('shortName', ticker)
         
-        # 🟢 STRICT LOGIC: $20M - $300M Range
+        # 🟢 STRICT LOGIC
         if MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP:
             print(f"✅ {ticker} is a Micro-Cap (${mkt_cap:,.0f}). Accepted.")
             return {"market_cap": mkt_cap, "is_small_cap": True, "company_name": name}
         else:
-            print(f"🚫 {ticker} Rejected (${mkt_cap:,.0f}). Too Big/Small. Retry.")
-            return {"market_cap": mkt_cap, "is_small_cap": False, "company_name": name}
+            print(f"🚫 {ticker} Rejected (${mkt_cap:,.0f}). Retry.")
+            return {
+                "market_cap": mkt_cap, 
+                "is_small_cap": False, 
+                "company_name": name,
+                "retry_count": current_retries + 1 # 👈 INCREMENT HERE!
+            }
 
     except:
-        return {"is_small_cap": False, "market_cap": 0}
+        return {
+            "is_small_cap": False, 
+            "market_cap": 0,
+            "retry_count": current_retries + 1 # 👈 Increment on error
+        }
 
 def analyst_node(state):
     """
