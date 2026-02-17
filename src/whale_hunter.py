@@ -229,17 +229,25 @@ workflow.add_edge("email", END)
 
 app = workflow.compile()
 
-# 🟢 EXECUTION BLOCK
+# 🟢 EXECUTION BLOCK (SNIPER MODE)
 if __name__ == "__main__":
-    print("🚀 Starting Micro-Cap Hunter (Senior Fixed Version)...")
-    regions = ["USA", "UK"]
+    print("🚀 Starting Micro-Cap Hunter (Sniper Mode)...")
     
-    for market in regions:
-        print(f"\n--- 🏁 Hunt: {market} ---")
-        try:
-            # Explicitly reset retry_count to 0
-            app.invoke({"region": market, "retry_count": 0, "ticker": ""})
-            print(f"✅ {market} Complete.")
-        except Exception as e:
-            print(f"❌ Critical Error in {market}: {e}")
+    # 🌍 The Target List
+    regions = ["USA", "UK", "Canada", "Australia"]
+    
+    # 🎲 ROULETTE: Pick ONE random market to hunt today
+    # This prevents the 5-minute timeout by focusing the agent.
+    target_market = random.choice(regions)
+    
+    print(f"\n--- 🎯 Today's Mission: Hunt in {target_market} ---")
+    
+    try:
+        # Run the agent for the single chosen market
+        app.invoke({"region": target_market, "retry_count": 0, "ticker": ""})
+        print(f"✅ Mission Complete for {target_market}.")
+        
+    except Exception as e:
+        print(f"❌ Critical Error: {e}")
 
+    print("\n🎉 Global Mission Complete.")
