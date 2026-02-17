@@ -32,5 +32,5 @@ jobs:
           EMAIL_DAVID: ${{ secrets.EMAIL_DAVID }}
           # Shared Tools
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }} 
-        run: PYTHONPATH=. python src/niche_hunter.py
+        run: PYTHONPATH=. python src/whale_hunter.py
 
