@@ -21,6 +21,16 @@ MIN_MARKET_CAP = 10_000_000    # Min: $10 Million (Avoid shells)
 MAX_RETRIES = 1                # 2 Retries = 3 Total Attempts per region
 HARD_TIMEOUT_SECONDS = 240     # 4 minutes — self-kill before GitHub Actions does
 
+# 🌍 EXCHANGE SUFFIX MAP
+# yFinance requires the correct exchange suffix for non-US tickers.
+# For each region we list suffixes in priority order (most common first).
+REGION_SUFFIXES = {
+    "USA":       [""],                # No suffix needed
+    "UK":        [".L"],              # London Stock Exchange
+    "Canada":    [".TO", ".V"],       # TSX, TSX Venture
+    "Australia": [".AX"],             # ASX
+}
+
 
 # --- TIMEOUT HANDLER ---
 def _timeout_handler(signum, frame):
@@ -79,6 +89,48 @@ def extract_ticker_from_text(text: str) -> str:
     return "NONE"
 
 
+# --- HELPER: Exchange Suffix Resolution ---
+def resolve_ticker_suffix(raw_ticker: str, region: str) -> str:
+    """
+    Append the correct exchange suffix for non-US regions.
+    Tries each suffix against yFinance and returns the first one
+    that yields a valid marketCap > 0.
+
+    Examples:
+        resolve_ticker_suffix("FRU", "Canada")   -> "FRU.TO" or "FRU.V"
+        resolve_ticker_suffix("ABF", "UK")        -> "ABF.L"
+        resolve_ticker_suffix("LMFA", "USA")      -> "LMFA"
+    """
+    # If the ticker already has a suffix (e.g., LLM returned "ABF.L"), keep it
+    if "." in raw_ticker:
+        return raw_ticker
+
+    suffixes = REGION_SUFFIXES.get(region, [""])
+
+    # USA — no suffix needed
+    if suffixes == [""]:
+        return raw_ticker
+
+    # Try each suffix and validate against yFinance
+    for suffix in suffixes:
+        candidate = f"{raw_ticker}{suffix}"
+        try:
+            info = yf.Ticker(candidate).info
+            mkt_cap = info.get('marketCap', 0)
+            price = info.get('currentPrice', 0) or info.get('regularMarketPrice', 0)
+            if mkt_cap and mkt_cap > 0 and price and price > 0:
+                print(f"   🌍 Suffix resolved: {raw_ticker} → {candidate} (${mkt_cap:,.0f})")
+                return candidate
+            else:
+                print(f"   ⏭️  {candidate} — no valid data, trying next suffix...")
+        except Exception as e:
+            print(f"   ⏭️  {candidate} — yFinance error: {e}")
+
+    # If nothing worked, return the raw ticker (gatekeeper will reject it)
+    print(f"   ⚠️ No valid suffix found for {raw_ticker} in {region}. Passing raw.")
+    return raw_ticker
+
+
 # --- 3. THE WORKERS ---
 
 def scout_node(state):
@@ -125,6 +177,11 @@ def scout_node(state):
             raw_response = llm.invoke(extraction_prompt).content.strip()
             ticker = extract_ticker_from_text(raw_response)
             print(f"   🎯 Target: {ticker} (raw: '{raw_response[:60]}')")
+
+            # 🌍 SUFFIX ENFORCER: Fix non-US tickers
+            if ticker != "NONE":
+                ticker = resolve_ticker_suffix(ticker, region)
+
             return {"ticker": ticker}
         else:
             return {"ticker": "NONE"}
