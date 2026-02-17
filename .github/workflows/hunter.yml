@@ -34,6 +34,8 @@ jobs:
           RESEND_API_KEY_DAVID: ${{ secrets.RESEND_API_KEY_DAVID }}
           EMAIL_DAVID: ${{ secrets.EMAIL_DAVID }}
           # Shared Tools
-          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }} 
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          # 👇 ADD THIS LINE HERE:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }} 
         run: PYTHONPATH=. python src/whale_hunter.py
 
