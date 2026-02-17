@@ -12,13 +12,13 @@ from src.finance_tools import check_financial_health
 from src.email_utils import send_email_report
 from src.agent import brave_market_search 
 
-# --- 1. CONFIGURATION (STRICT MODE) ---
-# 📉 We are hunting MICRO-CAPS now.
-MAX_MARKET_CAP = 300_000_000   # Limit: $300 Million (Strict)
-MIN_MARKET_CAP = 20_000_000    # Min: $20 Million (Avoid total garbage)
-MAX_RETRIES = 3                # Try harder to find a match
+# --- 1. CONFIGURATION ---
+# 📉 MICRO-CAP SETTINGS
+MAX_MARKET_CAP = 300_000_000   # Max: $300 Million
+MIN_MARKET_CAP = 10_000_000    # Min: $10 Million (Avoid shells)
+MAX_RETRIES = 2                # 2 Retries = 3 Total Attempts per region
 
-# --- 2. THE MEMORY (State) ---
+# --- 2. THE MEMORY ---
 class AgentState(TypedDict):
     region: str             
     ticker: str             
@@ -31,19 +31,18 @@ class AgentState(TypedDict):
 
 llm = get_llm()
 
-# --- 3. THE WORKERS (Nodes) ---
+# --- 3. THE WORKERS ---
 
 def scout_node(state):
     """
-    🕵️‍♂️ THE MICRO-CAP SCOUT
-    Searches specifically for 'Microcap' and 'Nano Cap' opportunities.
+    🕵️‍♂️ THE SCOUT: Finds a ticker.
     """
     region = state.get('region', 'USA')
     retries = state.get('retry_count', 0)
     
-    print(f"🔭 Scouting {region} Micro-Caps... (Attempt {retries + 1})")
+    print(f"\n🔭 [Attempt {retries+1}/{MAX_RETRIES+1}] Scouting {region} Micro-Caps...")
     
-    # 🟢 NEW QUERIES: Explicitly ask for "Microcap" to avoid $1B companies
+    # Randomize query to find fresh targets
     base_queries = [
         f"undervalued microcap stocks {region} under $300m market cap",
         f"profitable nano cap stocks {region} 2026",
@@ -51,12 +50,14 @@ def scout_node(state):
         f"debt free microcap companies {region} high growth",
         f"insider buying microcap stocks {region} this week"
     ]
-    
     query = random.choice(base_queries)
-    print(f"   ↳ Query: '{query}'")
-
-    search_results = brave_market_search(query)
     
+    try:
+        search_results = brave_market_search(query)
+    except Exception as e:
+        print(f"   ❌ Search Error: {e}")
+        return {"ticker": "NONE"}
+
     # LLM Extraction
     extraction_prompt = f"""
     ROLE: Financial Data Extractor.
@@ -72,82 +73,75 @@ def scout_node(state):
         if llm:
             ticker = llm.invoke(extraction_prompt).content.strip().upper()
             ticker = ticker.replace("$", "").replace("Ticker:", "").strip()
+            # Clean junk
             if len(ticker) > 8 or " " in ticker: ticker = "NONE"
             
-            print(f"   🎯 Target Acquired: {ticker}")
-            return {"ticker": ticker, "retry_count": retries}
+            print(f"   🎯 Target: {ticker}")
+            return {"ticker": ticker}
         else:
-            return {"ticker": "NONE", "retry_count": retries}
-            
-    except Exception as e:
-        print(f"   ❌ Extraction Error: {e}")
-        return {"ticker": "NONE", "retry_count": retries}
+            return {"ticker": "NONE"}
+    except:
+        return {"ticker": "NONE"}
 
 def gatekeeper_node(state):
     """
-    🛡️ THE STRICT GATEKEEPER
+    🛡️ THE GATEKEEPER: Filters by size and manages the Retry Counter.
     """
     ticker = state['ticker']
-    current_retries = state.get('retry_count', 0) # Get current count
+    current_retries = state.get('retry_count', 0)
     
-    # Fail-safe for "NONE" ticker
-    if ticker == "NONE": 
+    # 1. Check for Invalid Ticker
+    if ticker == "NONE":
+        print(f"   🚫 No valid ticker found. Incrementing Retry.")
         return {
             "is_small_cap": False, 
-            "market_cap": 0,
-            "retry_count": current_retries + 1 # 👈 Increment on failure
+            "market_cap": 0, 
+            "retry_count": current_retries + 1 # 👈 CRITICAL FIX
         }
 
-    print(f"⚖️ Weighing {ticker}...")
+    # 2. Check Market Cap
+    print(f"   ⚖️ Weighing {ticker}...")
     try:
         stock = yf.Ticker(ticker)
         mkt_cap = stock.info.get('marketCap', 0)
         name = stock.info.get('shortName', ticker)
         
-        # 🟢 STRICT LOGIC
         if MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP:
-            print(f"✅ {ticker} is a Micro-Cap (${mkt_cap:,.0f}). Accepted.")
+            print(f"   ✅ {ticker} Accepted (${mkt_cap:,.0f}).")
             return {"market_cap": mkt_cap, "is_small_cap": True, "company_name": name}
         else:
-            print(f"🚫 {ticker} Rejected (${mkt_cap:,.0f}). Retry.")
+            print(f"   🚫 {ticker} Rejected (${mkt_cap:,.0f}). Incrementing Retry.")
             return {
                 "market_cap": mkt_cap, 
                 "is_small_cap": False, 
-                "company_name": name,
-                "retry_count": current_retries + 1 # 👈 INCREMENT HERE!
+                "retry_count": current_retries + 1 # 👈 CRITICAL FIX
             }
 
-    except:
+    except Exception as e:
+        print(f"   ❌ YFinance Error: {e}")
         return {
             "is_small_cap": False, 
-            "market_cap": 0,
-            "retry_count": current_retries + 1 # 👈 Increment on error
+            "market_cap": 0, 
+            "retry_count": current_retries + 1 # 👈 CRITICAL FIX
         }
 
 def analyst_node(state):
     """
-    🧠 THE ANALYST (Graham Logic)
+    🧠 THE ANALYST: Runs Graham Logic.
     """
     ticker = state['ticker']
+    print(f"   🧮 Analyzing {ticker}...")
+    
     fin_data = check_financial_health(ticker)
-    news = brave_market_search(f"{ticker} stock investor analysis")
+    news = brave_market_search(f"{ticker} stock analysis")
     
     prompt = f"""
-    Analyze {state['company_name']} ({ticker}) for a Value Investor.
-    Market Cap: ${state.get('market_cap', 0):,.0f} (Micro-Cap)
-    
-    GRAHAM DATA:
-    {fin_data.get('metrics')}
-    Health Check: {fin_data.get('reason')}
-    
-    MARKET NEWS:
-    {news}
-    
-    TASK:
-    Write a concise thesis.
-    Does it pass the Graham Number test?
-    
-    VERDICT: BUY / WATCH / AVOID.
+    Analyze {state.get('company_name', ticker)} ({ticker}).
+    Market Cap: ${state.get('market_cap', 0):,.0f}
+    Financials: {fin_data.get('metrics')}
+    News: {news}
+    Verdict: BUY / WATCH / AVOID.
+    Thesis: 3 sentences max.
     """
     
     if llm:
@@ -160,25 +154,34 @@ def analyst_node(state):
 
 def email_node(state):
     """
-    📧 THE REPORTER
+    📧 THE REPORTER: Sends Success OR Failure reports.
     """
-    ticker = state.get('ticker', 'Unknown')
     region = state.get('region', 'Global')
+    ticker = state.get('ticker', 'Unknown')
     verdict = state.get('final_verdict', 'No Verdict')
     
+    # 🚨 FAILURE REPORT (New Feature)
     if not state.get('is_small_cap'):
-        print(f"⚠️ No valid Micro-Cap found for {region} after retries.")
-        return {}
-    
-    subject = f"🧬 Micro-Cap Hunter ({region}): {ticker}"
-    html_body = f"""
-    <h1>📍 Region: {region}</h1>
-    <h2>Ticker: {ticker}</h2>
-    <h3>Market Cap: ${state.get('market_cap', 0):,.0f}</h3>
-    <hr>
-    {verdict.replace(chr(10), '<br>')}
-    <hr>
-    """
+        print(f"   ⚠️ Sending Failure Report for {region}...")
+        subject = f"🧬 Micro-Cap Hunter: No Targets Found ({region})"
+        html_body = f"""
+        <h1>❌ Hunt Failed: {region}</h1>
+        <p>Scouted {MAX_RETRIES + 1} times but found no companies meeting the strict Micro-Cap criteria ($10M - $300M).</p>
+        <hr>
+        <small>Agent: PrimoGreedy</small>
+        """
+    else:
+        # ✅ SUCCESS REPORT
+        print(f"   📨 Sending Analysis for {ticker}...")
+        subject = f"🧬 Micro-Cap Found ({region}): {ticker}"
+        html_body = f"""
+        <h1>📍 Region: {region}</h1>
+        <h2>Ticker: {ticker}</h2>
+        <h3>Market Cap: ${state.get('market_cap', 0):,.0f}</h3>
+        <hr>
+        {verdict.replace(chr(10), '<br>')}
+        <hr>
+        """
     
     team = [
         {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},
@@ -204,19 +207,23 @@ workflow.add_node("email", email_node)
 workflow.set_entry_point("scout")
 
 def check_status(state):
-    # If we found a gem, go to Analyst
-    if state['is_small_cap']: 
+    # 1. Found a Gem? -> Analyze
+    if state.get('is_small_cap'): 
         return "analyst"
     
-    # If we failed but have retries left, Loop back
-    if state['retry_count'] <= MAX_RETRIES:
-        return "scout"
+    # 2. Retries exhausted? -> Email Failure
+    if state.get('retry_count', 0) > MAX_RETRIES:
+        return "email" # 👈 NOW GOES TO EMAIL INSTEAD OF END
     
-    # If we ran out of retries, Give up
-    return END
+    # 3. Try again? -> Loop back
+    print("   🔄 Looping back...")
+    time.sleep(2) # Safety Pause
+    return "scout"
 
 workflow.add_edge("scout", "gatekeeper")
-workflow.add_conditional_edges("gatekeeper", check_status, {"analyst": "analyst", "scout": "scout", END: END})
+workflow.add_conditional_edges("gatekeeper", check_status, 
+    {"analyst": "analyst", "scout": "scout", "email": "email"}
+)
 workflow.add_edge("analyst", "email")
 workflow.add_edge("email", END)
 
@@ -224,16 +231,14 @@ app = workflow.compile()
 
 # 🟢 EXECUTION BLOCK
 if __name__ == "__main__":
-    print("🚀 Starting Micro-Cap Hunter (Sprint 7)...")
+    print("🚀 Starting Micro-Cap Hunter (Senior Fixed Version)...")
     regions = ["USA", "UK", "Canada", "Australia"]
     
     for market in regions:
-        print(f"\n--- 🏁 Initiating Hunt for {market} ---")
+        print(f"\n--- 🏁 Hunt: {market} ---")
         try:
+            # Explicitly reset retry_count to 0
             app.invoke({"region": market, "retry_count": 0, "ticker": ""})
-            print(f"✅ {market} Hunt Complete.")
-            time.sleep(2)
+            print(f"✅ {market} Complete.")
         except Exception as e:
-            print(f"❌ Error in {market}: {e}")
-            
-    print("\n🎉 Global Mission Complete.")
+            print(f"❌ Critical Error in {market}: {e}")

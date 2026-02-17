@@ -9,6 +9,7 @@ on:
 jobs:
   global-hunt:
     runs-on: ubuntu-latest
+    timeout-minutes: 5  # 👈 MAKE SURE THIS IS HERE
     steps:
       - uses: actions/checkout@v3
       
