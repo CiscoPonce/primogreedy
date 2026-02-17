@@ -1,259 +1,228 @@
 import os
-import operator
+import random
 from typing import TypedDict, Annotated, List, Union
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# Import our existing tools
+# Import tools
 import yfinance as yf
 from src.llm import get_llm 
 from src.finance_tools import check_financial_health
 from src.email_utils import send_email_report
-from src.agent import brave_market_search # Re-using the search tool from agent.py
+from src.agent import brave_market_search 
 
 # --- 1. CONFIGURATION ---
-# 📉 "Small Cap" Definition: Companies under $500 Million.
-# We ignore anything larger to focus on "Deep Value."
-MAX_MARKET_CAP = 500_000_000 
+MAX_MARKET_CAP = 500_000_000   # < $500M
+MIN_MARKET_CAP = 1_000_000     # > $1M (Avoid Penny Stocks/Ghosts)
+MAX_RETRIES = 3                # Try 3 different stocks before giving up
 
 # --- 2. THE MEMORY (State) ---
 class AgentState(TypedDict):
-    ticker: str             # The symbol (e.g., LMFA)
-    company_name: str       # Official Name
-    market_cap: float       # The size (e.g., $10M)
-    is_small_cap: bool      # True/False Flag
-    financial_data: dict    # Graham Numbers
-    final_verdict: str      # Buy/Avoid text
-    retry_count: int        # Loop Counter (to avoid infinite loops)
+    ticker: str             
+    company_name: str       
+    market_cap: float       
+    is_small_cap: bool      
+    financial_data: dict    
+    final_verdict: str      
+    retry_count: int        # 🔄 Track how many times we tried
 
-# Initialize LLM
 llm = get_llm()
 
 # --- 3. THE WORKERS (Nodes) ---
 
 def scout_node(state):
     """
-    🕵️‍♂️ THE REAL SCOUT (Live Mode)
-    Searches for fresh small-cap opportunities and extracts the best ticker.
+    🕵️‍♂️ THE SCOUT
+    Searches for a new target. 
+    If this is a retry, it changes the search query to find something fresh.
     """
-    print(f"🔭 Scouting Global Markets...")
-
-    # 1. Define the Hunt (We rotate regions or pick one)
-    # You can randomize this or hardcode a specific region per run
+    retries = state.get('retry_count', 0)
+    print(f"🔭 Scouting... (Attempt {retries + 1}/{MAX_RETRIES + 1})")
+    
+    # 1. diverse queries to ensure we don't find the same stock twice
     queries = [
-        "undervalued small cap stocks USA today news",
-        "top undervalued UK small cap stocks February 2026",
-        "ASX small cap value stocks winners today",
-        "TSX Venture undervalued mining stocks news"
+        "undervalued small cap stocks USA today",
+        "top rated microcap stocks 2026",
+        "insider buying small cap stocks this week",
+        "deep value small cap stocks UK",
+        "turnaround stocks under $500 million market cap",
+        "net net stocks list 2026"
     ]
     
-    # Pick a random query or cycle them (for now, let's grab USA/Global)
-    import random
+    # Pick a random query
     query = random.choice(queries)
     print(f"   ↳ Query: '{query}'")
 
-    # 2. Perform Real Search
+    # 2. Search
     search_results = brave_market_search(query)
     
-    if not search_results or "Error" in search_results:
-        print("   ⚠️ Search failed. Falling back to Safety.")
-        return {"ticker": "LMFA"} # Only use fallback on strict failure
-
-    # 3. Use LLM to Extract the Best Ticker
-    # The search gives us text; we need the LLM to pick the specific symbol.
+    # 3. LLM Extraction
     extraction_prompt = f"""
-    ROLE: You are a Financial Data Extractor.
+    ROLE: Financial Data Extractor.
+    INPUT: {search_results}
     
-    INPUT DATA (Search Results):
-    {search_results}
+    TASK: Extract the single most interesting stock ticker.
+    CONSTRAINT: Do NOT pick '{state.get('ticker', 'None')}'. Pick a DIFFERENT one if possible.
     
-    TASK:
-    Identify the single most interesting "Small Cap" or "Undervalued" stock ticker mentioned in the text.
-    Ignore large giants (like NVDA, TSLA).
-    
-    OUTPUT FORMAT:
-    Return ONLY the ticker symbol (e.g., LMFA, ABF.L, ALK.AX). 
-    Do not add markdown, explanation, or punctuation. just the symbol.
+    OUTPUT: Just the ticker symbol (e.g., LMFA). No text.
     """
     
     try:
         if llm:
             ticker = llm.invoke(extraction_prompt).content.strip().upper()
-            # Clean up ticker (remove $ or extra spaces)
             ticker = ticker.replace("$", "").replace("Ticker:", "").strip()
+            # Remove junk length
+            if len(ticker) > 6 or " " in ticker: ticker = "LMFA"
+            
             print(f"   🎯 Target Acquired: {ticker}")
-            return {"ticker": ticker}
+            return {"ticker": ticker, "retry_count": retries}
         else:
-            return {"ticker": "LMFA"} # No LLM available
+            return {"ticker": "LMFA", "retry_count": retries}
             
     except Exception as e:
         print(f"   ❌ Extraction Error: {e}")
-        return {"ticker": "LMFA"}
-    
+        return {"ticker": "LMFA", "retry_count": retries}
+
 def gatekeeper_node(state):
     """
-    🛡️ THE FILTER
-    Checks if the company is actually small enough (< $500M).
+    🛡️ THE STRICT GATEKEEPER
+    Now rejects $0 Market Caps and forces a Retry.
     """
     ticker = state['ticker']
     print(f"⚖️ Weighing {ticker}...")
     
     try:
         stock = yf.Ticker(ticker)
-        # Fast fetch of market cap
         mkt_cap = stock.info.get('marketCap', 0)
         name = stock.info.get('shortName', ticker)
         
-        # 🟢 THE LOGIC
-        if 0 < mkt_cap < MAX_MARKET_CAP:
-            print(f"✅ {ticker} is a Small Cap (${mkt_cap:,.0f}). Proceeding.")
+        # 🟢 STRICT LOGIC: Must be between $1M and $500M
+        if MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP:
+            print(f"✅ {ticker} is a Valid Gem (${mkt_cap:,.0f}). Proceeding.")
             return {"market_cap": mkt_cap, "is_small_cap": True, "company_name": name}
             
-        elif mkt_cap >= MAX_MARKET_CAP:
-            print(f"🚫 {ticker} is too big (${mkt_cap:,.0f}). Stopping.")
-            return {"market_cap": mkt_cap, "is_small_cap": False, "company_name": name}
-            
         else:
-            print(f"⚠️ Could not verify Cap for {ticker}. Assuming Small.")
-            return {"market_cap": 0, "is_small_cap": True, "company_name": name}
+            print(f"🚫 {ticker} Rejected. (Cap: ${mkt_cap:,.0f}). Requesting Retry.")
+            # We return False so the graph loops back
+            return {"market_cap": mkt_cap, "is_small_cap": False, "company_name": name}
 
     except Exception as e:
         print(f"❌ Gatekeeper Error: {e}")
-        return {"is_small_cap": False} # Fail safe
+        return {"is_small_cap": False, "market_cap": 0}
 
 def analyst_node(state):
     """
     🧠 THE ANALYST
-    Runs the Graham Number logic and writes the specific thesis.
     """
     ticker = state['ticker']
     print(f"🧮 Analyzing {ticker}...")
     
-    # 1. Run Math
     fin_data = check_financial_health(ticker)
+    news = brave_market_search(f"{ticker} stock analysis")
     
-    # 2. Run Qualitative Search
-    news = brave_market_search(f"{ticker} stock news analysis")
-    
-    # 3. Ask LLM for Verdict
     prompt = f"""
     Analyze {state['company_name']} ({ticker}).
     Market Cap: ${state.get('market_cap', 'N/A')}
+    Financials: {fin_data.get('reason')}
+    Metrics: {fin_data.get('metrics')}
+    News: {news}
     
-    Financial Health: {fin_data.get('reason')}
-    Graham Data: {fin_data.get('metrics')}
-    
-    Recent News:
-    {news}
-    
-    Task: Write a strict Value Investing Thesis.
-    Focus on: Downside Protection (Margin of Safety) vs Upside Potential.
     Verdict: BUY / WATCH / AVOID.
+    Thesis: 3 sentences max.
     """
     
     if llm:
-        response = llm.invoke([SystemMessage(content="You are a skeptical Value Investor."), HumanMessage(content=prompt)])
+        response = llm.invoke([SystemMessage(content="You are a value investor."), HumanMessage(content=prompt)])
         verdict = response.content
     else:
-        verdict = f"Simulated Verdict: {fin_data.get('reason')}"
+        verdict = f"Data: {fin_data.get('reason')}"
         
     return {"financial_data": fin_data, "final_verdict": verdict}
 
 def email_node(state):
     """
-    📧 THE REPORTER (Robust Version)
-    Sends an email even if the hunt failed, so we know the agent is alive.
+    📧 THE REPORTER
     """
     ticker = state.get('ticker', 'Unknown')
-    verdict = state.get('final_verdict', 'No Verdict Generated.')
+    verdict = state.get('final_verdict', 'No Verdict')
     
-    # 🚨 DEBUG: Print to logs
-    print(f"📨 Email Node Triggered for {ticker}")
-    print(f"   Verdict Length: {len(verdict)} chars")
-        
-    print(f"📨 Preparing email dispatch for {ticker}...")
+    # If we failed after 3 tries, send a failure report so we know.
+    if not state.get('is_small_cap'):
+        subject = "⚠️ Whale Hunter: Search Failed (3 Attempts)"
+        html_body = f"<h1>Search Failed</h1><p>Tried 3 times. Last attempt: {ticker} (Cap: ${state.get('market_cap')})</p>"
+    else:
+        subject = f"🐳 Whale Hunter: {ticker} Analysis"
+        html_body = f"""
+        <h1>🌊 Whale Hunter Report: {ticker}</h1>
+        <h3>Market Cap: ${state.get('market_cap', 0):,.0f}</h3>
+        <hr>
+        <p>{verdict.replace(chr(10), '<br>')}</p>
+        <hr>
+        <small>Generated by LangGraph Agent</small>
+        """
+    
+    print(f"📨 Sending Email: {subject}")
 
-    # 1. Define Team
     team = [
         {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},
         {"name": "Raul",  "email": os.getenv("EMAIL_RAUL"),  "key": os.getenv("RESEND_API_KEY_RAUL")},
         {"name": "David", "email": os.getenv("EMAIL_DAVID"), "key": os.getenv("RESEND_API_KEY_DAVID")}
     ]
     
-    # 2. Format HTML
-    subject = f"🐳 Whale Hunter: {ticker} Analysis"
-    html_body = f"""
-    <h1>🌊 Whale Hunter Report: {ticker}</h1>
-    <h3>Market Cap: ${state.get('market_cap', 0):,.0f}</h3>
-    <hr>
-    <p>{verdict.replace(chr(10), '<br>')}</p>
-    <hr>
-    <small>Generated by LangGraph Agent (Sprint 7)</small>
-    """
-    
-    # 3. Send Loop
-    results = []
     for member in team:
         if member["email"] and member["key"]:
             try:
                 send_email_report(subject, html_body, member["email"], member["key"])
-                results.append(f"Sent to {member['name']}")
-            except Exception as e:
-                print(f"Failed to send to {member['name']}: {e}")
-    
-    return {"final_verdict": verdict} # Pass through
+            except: pass
+            
+    return {}
 
 # --- 4. THE GRAPH (Manager) ---
 
 workflow = StateGraph(AgentState)
 
-# Add Nodes
 workflow.add_node("scout", scout_node)
 workflow.add_node("gatekeeper", gatekeeper_node)
 workflow.add_node("analyst", analyst_node)
 workflow.add_node("email", email_node)
 
-# Set Entry Point
 workflow.set_entry_point("scout")
 
-# --- 5. THE ROUTING LOGIC ---
-def check_size(state):
+# 🟢 THE LOOP LOGIC
+def check_status(state):
     if state['is_small_cap']:
-        return "analyst"  # 🟢 Small enough? Analyze it.
-    else:
-        return END        # 🔴 Too big? Stop immediately.
+        return "analyst"  # ✅ Found one! Analyze it.
+    
+    if state['retry_count'] < MAX_RETRIES:
+        # 🔄 Increment retry and LOOP BACK to scout
+        state['retry_count'] += 1
+        return "scout"
+    
+    return "email" # ❌ Give up and email failure report
 
 workflow.add_edge("scout", "gatekeeper")
 
 workflow.add_conditional_edges(
     "gatekeeper",
-    check_size,
+    check_status,
     {
         "analyst": "analyst",
-        END: END
+        "scout": "scout",    # 👈 The Loop
+        "email": "email"
     }
 )
 
 workflow.add_edge("analyst", "email")
 workflow.add_edge("email", END)
 
-# Compile
 app = workflow.compile()
 
-
-
-# 🟢 THE EXECUTION BLOCK )
+# 🟢 EXECUTION BLOCK
 if __name__ == "__main__":
     print("🚀 Starting Whale Hunter Agent (Sprint 7)...")
-    
     try:
-        # Run the graph
-        # We pass an empty ticker to trigger the 'Scout Node' logic
-        result = app.invoke({"ticker": ""})
-        
+        # Initialize retry_count to 0
+        result = app.invoke({"ticker": "", "retry_count": 0})
         print("✅ Mission Complete.")
-        print(f"Final Verdict: {result.get('final_verdict')}")
-        
     except Exception as e:
         print(f"❌ CRITICAL FAILURE: {str(e)}")
-
