@@ -161,12 +161,16 @@ def analyst_node(state):
 
 def email_node(state):
     """
-    📧 THE REPORTER
-    Dispatches the report to the team (Cisco, Raul, David).
+    📧 THE REPORTER (Robust Version)
+    Sends an email even if the hunt failed, so we know the agent is alive.
     """
-    ticker = state['ticker']
-    verdict = state['final_verdict']
+    ticker = state.get('ticker', 'Unknown')
+    verdict = state.get('final_verdict', 'No Verdict Generated.')
     
+    # 🚨 DEBUG: Print to logs
+    print(f"📨 Email Node Triggered for {ticker}")
+    print(f"   Verdict Length: {len(verdict)} chars")
+        
     print(f"📨 Preparing email dispatch for {ticker}...")
 
     # 1. Define Team
