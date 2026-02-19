@@ -1,16 +1,33 @@
+import os
 import re
 import random
 import time
 import gc
+import requests
 import yfinance as yf
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-from src.agent_tools import brave_market_search
 
-# Import your tools (adjust these imports based on your exact file structure)
+# Import your LLM tool
 from src.llm import get_llm
-from src.agent_tools import brave_market_search 
+
+# --- INLINE SEARCH TOOL ---
+def brave_market_search(query: str) -> str:
+    """Uses the Brave Search API to find financial news."""
+    api_key = os.getenv("BRAVE_API_KEY")
+    if not api_key:
+        return "No Brave API key found."
+        
+    headers = {"Accept": "application/json", "X-Subscription-Token": api_key}
+    try:
+        response = requests.get(f"https://api.search.brave.com/res/v1/web/search?q={query}", headers=headers)
+        if response.status_code == 200:
+            results = response.json().get("web", {}).get("results", [])
+            return "\n".join([f"- {r.get('title')}: {r.get('description')}" for r in results[:5]])
+        return "Search failed."
+    except Exception as e:
+        return f"Search error: {str(e)}"
 
 # --- CONFIGURATION ---
 MAX_MARKET_CAP = 300_000_000
