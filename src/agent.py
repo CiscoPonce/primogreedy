@@ -86,8 +86,7 @@ def gatekeeper_node(state):
     retries = state.get('retry_count', 0)
     
     if ticker == "NONE":
-        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": "No ticker found"}}
-
+return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"API Error: {str(e)}"}}
     try:
         stock = yf.Ticker(ticker)
         raw_info = stock.info
