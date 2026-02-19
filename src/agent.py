@@ -1,188 +1,173 @@
-import os
-from typing import TypedDict, Optional, Any
+import re
+import random
+import time
+import gc
+import yfinance as yf
+from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-import requests
-import yfinance as yf
-# Assuming get_llm is defined in src.llm
-from src.llm import get_llm 
-from src.finance_tools import check_financial_health
-from src.viz import get_stock_chart
-from src.email_utils import send_email_report
 
-# --- 1. STATE DEFINITION ---
+# Import your tools (adjust these imports based on your exact file structure)
+from src.llm import get_llm
+from src.agent_tools import brave_market_search 
+
+# --- CONFIGURATION ---
+MAX_MARKET_CAP = 300_000_000
+MIN_MARKET_CAP = 10_000_000
+MAX_PRICE_PER_SHARE = 30.00
+MAX_RETRIES = 1
+
+REGION_SUFFIXES = {
+    "USA": [""], "UK": [".L"], "Canada": [".TO", ".V"], "Australia": [".AX"]
+}
+
+# --- STATE MEMORY ---
 class AgentState(TypedDict):
+    region: str
     ticker: str
-    status: str
-    financial_data: Optional[dict]
-    final_report: Optional[str]
-    chart_data: Optional[Any]
-    email_status: Optional[str]
-    insider_info: Optional[str]
+    company_name: str
+    market_cap: float
+    is_small_cap: bool
+    financial_data: dict
+    final_verdict: str
+    retry_count: int
+    status: str          # For app.py compatibility (PASS/FAIL)
+    final_report: str    # For app.py compatibility
+    chart_data: bytes    # For app.py compatibility
 
-# Initialize LLM
-try:
-    llm = get_llm()
-except:
-    llm = None # Handle missing API key gracefully
+llm = get_llm()
 
-# --- 2. TOOLS ---
+# --- HELPERS ---
+def extract_ticker_from_text(text: str) -> str:
+    cleaned = text.strip().upper()
+    if re.fullmatch(r'[A-Z]{1,5}(\.[A-Z]{1,2})?', cleaned): return cleaned
+    candidates = re.findall(r'\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?)\b', cleaned)
+    noise_words = {"THE", "AND", "FOR", "ARE", "NOT", "YOU", "ALL", "CAN", "ONE", "OUT", "HAS", "NEW", "NOW", "SEE", "WHO", "GET", "SHE", "TOO", "USE", "NONE", "THIS", "THAT", "WITH", "HAVE", "FROM", "THEY", "BEEN", "SAID", "MAKE", "LIKE", "JUST", "OVER", "SUCH", "TAKE", "YEAR", "SOME", "MOST", "VERY", "WHEN", "WHAT", "YOUR", "ALSO", "INTO", "ROLE", "TASK", "INPUT", "STOCK", "TICKER", "CAP", "MICRO", "NANO"}
+    candidates = [c for c in candidates if c not in noise_words and len(c) >= 2]
+    return candidates[0] if candidates else "NONE"
 
-def brave_market_search(query: str):
-    api_key = os.getenv("BRAVE_API_KEY")
-    if not api_key: return "⚠️ Brave Key Missing."
+def resolve_ticker_suffix(raw_ticker: str, region: str) -> str:
+    if "." in raw_ticker: return raw_ticker
+    suffixes = REGION_SUFFIXES.get(region, [""])
+    if suffixes == [""]: return raw_ticker
+    for suffix in suffixes:
+        candidate = f"{raw_ticker}{suffix}"
+        try:
+            if yf.Ticker(candidate).info.get('marketCap', 0) > 0:
+                return candidate
+        except: pass
+    return raw_ticker
+
+# --- NODES ---
+def scout_node(state):
+    region = state.get('region', 'USA')
+    retries = state.get('retry_count', 0)
+    # If a ticker was manually passed (e.g., from app.py), skip scouting
+    if state.get('ticker') and state['ticker'] != "NONE" and retries == 0:
+        return {"ticker": resolve_ticker_suffix(state['ticker'], region)}
+
+    if retries > 0: time.sleep(2)
     
-    url = "https://api.search.brave.com/res/v1/web/search"
-    headers = {"X-Subscription-Token": api_key}
-    params = {"q": f"{query} stock news analysis moat competition", "count": 5, "freshness": "pw"}
-    
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get("web", {}).get("results", [])
-            snippets = [f"HEADLINE: {r['title']}\nSNIPPET: {r['description']}" for r in results]
-            return "\n\n".join(snippets)
-        return "No news found."
-    except Exception as e:
-        return f"Search Error: {str(e)}"
-
-def get_insider_activity(ticker: str):
-    try:
-        stock = yf.Ticker(ticker)
-        # Note: insider_transactions can be tricky with yfinance sometimes
-        return "Insider data skipped for speed." 
-    except:
-        return "Could not retrieve insider data."
-
-# --- 3. NODES ---
-
-def check_health(state: AgentState):
-    """The Graham Logic Firewall Node."""
-    ticker = state['ticker'].upper()
-    try:
-        result = check_financial_health(ticker)
-        return {"financial_data": result, "status": result['status']}
-    except Exception as e:
-        return {"status": "FAIL", "financial_data": {"reason": str(e)}}
-
-async def analyze_stock(state: AgentState):
-    """The Buffett Analyst Node."""
-    # If the stock failed the financial check, we stop here.
-    if state.get('status') == "FAIL": 
-        return {"final_report": f"Rejected: {state['financial_data'].get('reason')}"}
-
-    ticker = state['ticker'].upper()
-    
-    try:
-        stock = yf.Ticker(ticker)
-        company_name = stock.info.get('shortName') or ticker
-    except:
-        company_name = ticker
-
-    # Gather Data
-    search_query = f"{company_name} competitive advantage"
-    market_news = brave_market_search(search_query)
-    chart_bytes = get_stock_chart(ticker)
-    
-    # Extract Metrics
-    metrics = state['financial_data'].get('metrics', {})
-    graham_val = metrics.get('intrinsic_value', 'N/A')
-    
-    # --- PROMPT ---
-    prompt = f"""
-    ROLE: You are PrimoGreedy, a Value Investor.
-    
-    OBJECTIVE: Determine if {company_name} ({ticker}) is a "Wonderful Company at a Fair Price."
-
-    HARD DATA:
-    - Sector: {metrics.get('sector', 'Unknown')}
-    - Price: ${metrics.get('current_price', 'N/A')}
-    - Graham Value: ${graham_val}
-    - Debt/Equity: {metrics.get('debt_to_equity', 'N/A')}
-    
-    NEWS CONTEXT:
-    {market_news}
-
-    OUTPUT FORMAT:
-    Start with "VERDICT: [BUY/HOLD/AVOID]".
-    Then write a concise thesis explaining WHY.
-    Finally, list one "Key Risk".
-    """
-    
-    if llm:
-        response_msg = await llm.ainvoke([
-            SystemMessage(content="You are a skeptical Value Investor."), 
-            HumanMessage(content=prompt)
-        ])
-        content = response_msg.content
-    else:
-        content = "LLM Not Configured."
-
-    # --- 🟢 MULTI-USER EMAIL DISPATCH ---
-    
-    # 1. Define the Team Roster
-    team = [
-        {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},
-        {"name": "Raul",  "email": os.getenv("EMAIL_RAUL"),  "key": os.getenv("RESEND_API_KEY_RAUL")},
-        {"name": "David", "email": os.getenv("EMAIL_DAVID"), "key": os.getenv("RESEND_API_KEY_DAVID")}
+    base_queries = [
+        f"undervalued microcap stocks {region} under $300m market cap",
+        f"profitable nano cap stocks {region} 2026",
+        f"hidden gem microcap stocks {region} with low float"
     ]
+    try:
+        search_results = brave_market_search(random.choice(base_queries))
+        raw = llm.invoke(f"Extract single MICRO-CAP ticker in {region} from: {str(search_results)[:2000]}").content
+        ticker = extract_ticker_from_text(raw)
+        if ticker != "NONE": ticker = resolve_ticker_suffix(ticker, region)
+        return {"ticker": ticker}
+    except: return {"ticker": "NONE"}
+
+def gatekeeper_node(state):
+    ticker = state.get('ticker', 'NONE')
+    retries = state.get('retry_count', 0)
     
-    subject = f"Analyze: {ticker} - Deep Dive Verdict"
-    html_body = f"""
-    <h1>🔎 PrimoGreedy Deep Dive: {ticker}</h1>
-    <p>{content.replace(chr(10), '<br>')}</p>
-    <hr>
-    <small>Generated by Chainlit Web App (Team Dispatch)</small>
+    if ticker == "NONE":
+        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": "No ticker found"}}
+
+    try:
+        stock = yf.Ticker(ticker)
+        raw_info = stock.info
+        
+        # 🚨 THE DATA DIET: Extract only what we need, then delete raw_info to prevent Memory Crashes
+        lean_info = {
+            'currentPrice': raw_info.get('currentPrice', 0) or raw_info.get('regularMarketPrice', 0),
+            'trailingEps': raw_info.get('trailingEps', 0),
+            'bookValue': raw_info.get('bookValue', 0),
+            'marketCap': raw_info.get('marketCap', 0),
+            'ebitda': raw_info.get('ebitda', 0),
+            'sector': raw_info.get('sector', 'Unknown')
+        }
+        del raw_info 
+        gc.collect() # Force immediate RAM cleanup
+
+        price = lean_info['currentPrice']
+        mkt_cap = lean_info['marketCap']
+        
+        # Price & Cap Filters
+        if price > MAX_PRICE_PER_SHARE:
+            return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"Price ${price} > ${MAX_PRICE_PER_SHARE}"}}
+        if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
+            return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"Cap ${mkt_cap:,.0f} out of bounds"}}
+
+        return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info}
+    except Exception as e:
+        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"API Error: {str(e)}"}]
+
+def analyst_node(state):
+    ticker = state['ticker']
+    info = state.get('financial_data', {})
+    
+    price = info.get('currentPrice', 0)
+    eps = info.get('trailingEps', 0)
+    book_value = info.get('bookValue', 0)
+    ebitda = info.get('ebitda', 0)
+    sector = info.get('sector', 'Unknown')
+    
+    # 🧠 SENIOR BROKER LOGIC
+    if eps > 0 and book_value > 0:
+        strategy = "GRAHAM VALUE"
+        valuation = (22.5 * eps * book_value) ** 0.5
+        thesis = f"Profitable in {sector}. Graham Value ${valuation:.2f} vs Price ${price:.2f}. EBITDA: ${ebitda:,.0f}."
+    else:
+        strategy = "DEEP VALUE ASSET PLAY"
+        valuation = book_value
+        thesis = f"Unprofitable in {sector}. Trading at {(price/book_value if book_value > 0 else 0):.2f}x Book Value. EBITDA: ${ebitda:,.0f}. Assets are the safety net."
+
+    news = brave_market_search(f"{ticker} stock {sector} catalysts insider buying")
+    
+    prompt = f"""
+    Act as a Senior Financial Broker evaluating {state.get('company_name')} ({ticker}).
+    STRATEGY: {strategy}
+    DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {ebitda}
+    CONTEXT: {thesis}
+    NEWS: {str(news)[:1500]}
+    
+    OUTPUT:
+    VERDICT: STRONG BUY / BUY / WATCH / AVOID
+    RATIONALE: Max 3 sentences weighing Graham valuation/Assets against News.
     """
-    
-    email_logs = []
-    
-    # 2. Loop through the team
-    for member in team:
-        if member["email"] and member["key"]:
-            try:
-                # Call the dumb utility with all 4 required args
-                send_email_report(subject, html_body, member["email"], member["key"])
-                email_logs.append(f"✅ Sent to {member['name']}")
-            except Exception as e:
-                email_logs.append(f"❌ Failed {member['name']}")
-        else:
-            email_logs.append(f"⚠️ Skipped {member['name']} (No Key)")
-    
-    return {
-        "final_report": content, 
-        "chart_data": chart_bytes,
-        "email_status": " | ".join(email_logs)
-    }
+    verdict = llm.invoke(prompt).content if llm else f"Strategy: {strategy}"
+    return {"final_verdict": verdict, "final_report": verdict}
 
-async def chat_mode(state: AgentState):
-    if llm:
-        response = await llm.ainvoke([HumanMessage(content=state['ticker'])])
-        return {"final_report": response.content, "status": "CHAT"}
-    return {"final_report": "Chat mode unavailable (No LLM).", "status": "CHAT"}
-
-# --- 4. GRAPH SETUP ---
-
-def route_query(state: AgentState):
-    query = state['ticker'].strip().upper()
-    # Simple logic: If it looks like a ticker (1-5 chars), run analysis. Else chat.
-    if 1 <= len(query) <= 5 and " " not in query:
-        return "financial_health_check"
-    return "chat_mode"
-
+# --- GRAPH BUILDER ---
 workflow = StateGraph(AgentState)
-workflow.add_node("financial_health_check", check_health)
-workflow.add_node("analyst_research", analyze_stock)
-workflow.add_node("chat_mode", chat_mode)
+workflow.add_node("scout", scout_node)
+workflow.add_node("gatekeeper", gatekeeper_node)
+workflow.add_node("analyst", analyst_node)
 
-workflow.set_conditional_entry_point(route_query, {
-    "financial_health_check": "financial_health_check", 
-    "chat_mode": "chat_mode"
-})
+workflow.set_entry_point("scout")
 
-workflow.add_edge("financial_health_check", "analyst_research")
-workflow.add_edge("analyst_research", END)
-workflow.add_edge("chat_mode", END)
+def check_status(state):
+    if state.get('is_small_cap'): return "analyst"
+    if state.get('retry_count', 0) > MAX_RETRIES: return END
+    return "scout"
+
+workflow.add_edge("scout", "gatekeeper")
+workflow.add_conditional_edges("gatekeeper", check_status, {"analyst": "analyst", "scout": "scout", END: END})
+workflow.add_edge("analyst", END)
 
 app = workflow.compile()

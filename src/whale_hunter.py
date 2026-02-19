@@ -18,8 +18,9 @@ from src.agent import brave_market_search
 # --- 1. CONFIGURATION ---
 MAX_MARKET_CAP = 300_000_000   # Max: $300 Million
 MIN_MARKET_CAP = 10_000_000    # Min: $10 Million
+MAX_PRICE_PER_SHARE = 30.00    # NEW: Must be under $30
 MAX_RETRIES = 1                # 1 Retry per region (Total 2 attempts)
-HARD_TIMEOUT_SECONDS = 1500    # 25 minutes (Enough for 4 countries)
+HARD_TIMEOUT_SECONDS = 3000    # 50 minutes to match GitHub Actions
 
 # 🌍 EXCHANGE SUFFIX MAP
 REGION_SUFFIXES = {
@@ -31,7 +32,7 @@ REGION_SUFFIXES = {
 
 # --- TIMEOUT HANDLER ---
 def _timeout_handler(signum, frame):
-    raise TimeoutError("⏰ Hard timeout reached (25 minutes). Aborting.")
+    raise TimeoutError("⏰ Hard timeout reached (50 minutes). Aborting.")
 
 # --- 2. THE MEMORY ---
 class AgentState(TypedDict):
@@ -83,10 +84,10 @@ def scout_node(state):
     print(f"\n🔭 [Attempt {retries+1}/{MAX_RETRIES+1}] Scouting {region} Micro-Caps...")
     
     base_queries = [
-        f"undervalued microcap stocks {region} under $300m market cap",
-        f"profitable nano cap stocks {region} 2026",
+        f"best value stocks {region} under $30 per share",
+        f"undervalued stocks {region} price below 30 dollars",
         f"hidden gem microcap stocks {region} with low float",
-        f"debt free microcap companies {region} high growth",
+        f"benjamin graham net net stocks {region} cheap share price",
         f"insider buying microcap stocks {region} this week"
     ]
     
@@ -125,51 +126,84 @@ def gatekeeper_node(state):
     print(f"   ⚖️ Weighing {ticker}...")
     try:
         stock = yf.Ticker(ticker)
-        mkt_cap = stock.info.get('marketCap', 0)
-        name = stock.info.get('shortName', ticker)
+        info = stock.info
         
+        mkt_cap = info.get('marketCap', 0)
+        price = info.get('currentPrice', 0) or info.get('regularMarketPrice', 0)
+        name = info.get('shortName', ticker)
+        
+        # 1. Price Check
+        if price > MAX_PRICE_PER_SHARE:
+             print(f"   🚫 {ticker} Rejected — Price ${price} > ${MAX_PRICE_PER_SHARE}.")
+             return {"is_small_cap": False, "retry_count": retries + 1}
+
+        # 2. Market Cap Check
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
-            print(f"   🚫 {ticker} Rejected (${mkt_cap:,.0f}).")
+            print(f"   🚫 {ticker} Rejected — Cap ${mkt_cap:,.0f} out of range.")
             return {"is_small_cap": False, "retry_count": retries + 1}
 
-        print(f"   ✅ {ticker} Market Cap OK (${mkt_cap:,.0f})")
+        print(f"   ✅ {ticker} Passed Gatekeeper (Price: ${price} | Cap: ${mkt_cap:,.0f})")
         
-        # Advisory Health Check
-        health = check_financial_health(ticker)
-        print(f"   🧮 Health Check: {health.get('status', 'UNKNOWN')}")
-        
+        # We pass the full info dictionary to the Analyst so it can do the Two-Path logic
         return {
             "market_cap": mkt_cap, 
             "is_small_cap": True, 
             "company_name": name, 
-            "financial_data": health
+            "financial_data": info
         }
-    except:
+    except Exception as e:
+        print(f"   ❌ YFinance Error for {ticker}: {e}")
         return {"is_small_cap": False, "retry_count": retries + 1}
 
 def analyst_node(state):
+    """
+    🧠 THE SENIOR BROKER
+    Evaluates Profitable stocks using Graham Number.
+    Evaluates Unprofitable stocks (Miners/Biotech) using Asset Value.
+    """
     ticker = state['ticker']
-    fin_data = state.get('financial_data', {})
+    info = state.get('financial_data', {})
     print(f"   🧠 Analyzing {ticker}...")
     
-    news = brave_market_search(f"{ticker} stock analysis")
+    # Extract Key Metrics
+    price = info.get('currentPrice', 0) or info.get('regularMarketPrice', 0)
+    eps = info.get('trailingEps', 0)
+    book_value = info.get('bookValue', 0)
+    
+    # SENIOR BROKER LOGIC
+    if eps > 0 and book_value > 0:
+        strategy = "GRAHAM CLASSIC"
+        valuation = (22.5 * eps * book_value) ** 0.5
+        thesis = f"Profitable. Graham Value ${valuation:.2f} vs Price ${price:.2f}."
+    else:
+        strategy = "DEEP VALUE ASSET PLAY"
+        valuation = book_value
+        ratio = price / book_value if book_value > 0 else 0
+        thesis = f"Unprofitable Miner/Turnaround. Trading at {ratio:.2f}x Book Value. Assets are the safety net."
+
+    news = brave_market_search(f"{ticker} stock analysis catalysts")
+    
     prompt = f"""
-    Analyze {state.get('company_name', ticker)} ({ticker}).
-    Market Cap: ${state.get('market_cap', 0):,.0f}
-    Metrics: {fin_data.get('metrics')}
-    News: {news}
+    Act as a Senior Financial Broker. Analyze {state.get('company_name', ticker)} ({ticker}).
     
-    Instructions:
-    - If unprofitable, evaluate as a turnaround play (Assets/Cash).
-    - Be honest about risks.
+    STRATEGY: {strategy}
+    DATA: Price: ${price} | EPS: {eps} | Book Value/Share: {book_value}
+    CONTEXT: {thesis}
+    NEWS: {news}
     
-    Verdict: BUY / WATCH / AVOID.
-    Thesis: 3 sentences max.
+    DECISION LOGIC:
+    1. If Strategy is GRAHAM: Is it cheap relative to earnings?
+    2. If Strategy is ASSET PLAY: Is the company going bankrupt, or is the land/cash real?
+    
+    OUTPUT:
+    VERDICT: STRONG BUY / BUY / WATCH / AVOID
+    RATIONALE: Max 3 sentences weighing Valuation vs News.
     """
     
     if llm:
-        verdict = llm.invoke([SystemMessage(content="You are a Value Investor."), HumanMessage(content=prompt)]).content
-    else: verdict = "No AI Analysis available."
+        verdict = llm.invoke([SystemMessage(content="You are a skeptical Value Investor."), HumanMessage(content=prompt)]).content
+    else: 
+        verdict = "No AI Analysis available."
     
     return {"final_verdict": verdict}
 
@@ -177,12 +211,11 @@ def email_node(state):
     region = state.get('region', 'Global')
     ticker = state.get('ticker', 'Unknown')
     verdict = state.get('final_verdict', 'No Verdict')
-    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     
     if not state.get('is_small_cap'):
         print(f"   ⚠️ Sending Failure Report for {region}...")
         subject = f"❌ Hunt Failed: {region}"
-        body = f"Found no suitable Micro-Caps in {region} after {MAX_RETRIES+1} attempts."
+        body = f"Found no suitable Micro-Caps under ${MAX_PRICE_PER_SHARE} in {region} after {MAX_RETRIES+1} attempts."
     else:
         print(f"   📨 Sending Analysis for {ticker}...")
         subject = f"🧬 Micro-Cap Found ({region}): {ticker}"
@@ -223,7 +256,7 @@ app = workflow.compile()
 
 # 🟢 EXECUTION BLOCK (GLOBAL MARATHON MODE)
 if __name__ == "__main__":
-    print("🚀 Starting Global Micro-Cap Hunter (All Regions)...")
+    print("🚀 Starting Global Micro-Cap Hunter (Senior Broker Edition)...")
     
     try:
         signal.signal(signal.SIGALRM, _timeout_handler)
@@ -237,10 +270,9 @@ if __name__ == "__main__":
     for market in regions:
         print(f"\n--- 🏁 Initiating Hunt for {market} ---")
         try:
-            # Run the agent for this specific market
             app.invoke({"region": market, "retry_count": 0, "ticker": ""})
             print(f"✅ {market} Hunt Complete.")
-            time.sleep(5) # Rest between countries
+            time.sleep(5) 
         except Exception as e:
             print(f"❌ Error in {market}: {e}")
 
