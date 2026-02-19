@@ -6,6 +6,7 @@ import yfinance as yf
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
+from src.agent_tools import brave_market_search
 
 # Import your tools (adjust these imports based on your exact file structure)
 from src.llm import get_llm
