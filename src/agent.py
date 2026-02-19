@@ -81,12 +81,13 @@ def scout_node(state):
         return {"ticker": ticker}
     except: return {"ticker": "NONE"}
 
-def gatekeeper_node(state):
+ddef gatekeeper_node(state):
     ticker = state.get('ticker', 'NONE')
     retries = state.get('retry_count', 0)
     
     if ticker == "NONE":
-return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"API Error: {str(e)}"}}
+        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": "No ticker found"}}
+
     try:
         stock = yf.Ticker(ticker)
         raw_info = stock.info
@@ -114,7 +115,7 @@ return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "fi
 
         return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info}
     except Exception as e:
-        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"API Error: {str(e)}"}]
+        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"API Error: {str(e)}"}}
 
 def analyst_node(state):
     ticker = state['ticker']
