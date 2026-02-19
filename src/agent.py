@@ -81,7 +81,7 @@ def scout_node(state):
         return {"ticker": ticker}
     except: return {"ticker": "NONE"}
 
-ddef gatekeeper_node(state):
+def gatekeeper_node(state):
     ticker = state.get('ticker', 'NONE')
     retries = state.get('retry_count', 0)
     
