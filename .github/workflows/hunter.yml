@@ -12,6 +12,10 @@ jobs:
     # 👇 CRITICAL UPDATE: Set this to 60 minutes
     timeout-minutes: 60
     
+    # 🚨 CRITICAL NEW STEP: Grant the bot permission to push files to the repo
+    permissions:
+      contents: write
+    
     steps:
       - uses: actions/checkout@v4
       
@@ -37,3 +41,14 @@ jobs:
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: PYTHONPATH=. python src/whale_hunter.py
+
+      # 🚨 CRITICAL NEW STEP: Save the memory file safely without crashing
+      - name: Commit Exclusion Memory
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Create an empty JSON file if the Scout didn't find anything, preventing Git crashes
+          if [ ! -f seen_tickers.json ]; then echo "{}" > seen_tickers.json; fi
+          git add seen_tickers.json
+          git commit -m "🧠 Update Agent Memory Ledger" || echo "No changes to commit"
+          git push
