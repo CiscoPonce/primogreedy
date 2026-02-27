@@ -3,8 +3,10 @@ import re
 import random
 import time
 import gc
+import json
 import requests
 import yfinance as yf
+from datetime import datetime, timezone
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -29,6 +31,22 @@ def brave_market_search(query: str) -> str:
     except Exception as e:
         return f"Search error: {str(e)}"
 
+# --- EXCLUSION MEMORY (JSON LEDGER) ---
+MEMORY_FILE = "seen_tickers.json"
+
+def load_memory():
+    if not os.path.exists(MEMORY_FILE): return {}
+    try:
+        with open(MEMORY_FILE, "r") as f: return json.load(f)
+    except: return {}
+
+def mark_ticker_seen(ticker):
+    mem = load_memory()
+    mem[ticker] = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(MEMORY_FILE, "w") as f: json.dump(mem, f, indent=4)
+    except: pass 
+
 # --- CONFIGURATION ---
 MAX_MARKET_CAP = 300_000_000
 MIN_MARKET_CAP = 10_000_000
@@ -49,9 +67,10 @@ class AgentState(TypedDict):
     financial_data: dict
     final_verdict: str
     retry_count: int
-    status: str          # For app.py compatibility (PASS/FAIL)
-    final_report: str    # For app.py compatibility
-    chart_data: bytes    # For app.py compatibility
+    status: str          
+    final_report: str    
+    chart_data: bytes    
+    manual_search: bool  # Tracks if the user typed this in the UI
 
 llm = get_llm()
 
@@ -80,37 +99,56 @@ def resolve_ticker_suffix(raw_ticker: str, region: str) -> str:
 def scout_node(state):
     region = state.get('region', 'USA')
     retries = state.get('retry_count', 0)
-    # If a ticker was manually passed (e.g., from app.py), skip scouting
-    if state.get('ticker') and state['ticker'] != "NONE" and retries == 0:
-        return {"ticker": resolve_ticker_suffix(state['ticker'], region)}
+    
+    # Skip scouting if manually entered in UI
+    is_manual = bool(state.get('ticker') and state['ticker'] != "NONE" and retries == 0)
+    if is_manual:
+        return {"ticker": resolve_ticker_suffix(state['ticker'], region), "manual_search": True}
 
     if retries > 0: time.sleep(2)
     
+    # High-Fidelity Signal Queries
     base_queries = [
-        f"undervalued microcap stocks {region} under $300m market cap",
-        f"profitable nano cap stocks {region} 2026",
-        f"hidden gem microcap stocks {region} with low float"
+        f"site:twitter.com/DeItaone OR site:twitter.com/unusual_whales breaking {region} ticker",
+        f"site:twitter.com/eWhispers {region} earnings expectations",
+        f"site:twitter.com/financialjuice macro {region} impact",
+        f"site:twitter.com/Biotech2k1 FDA approval {region}",
+        f"site:openinsider.com C-Suite buys {region} under 300m",
+        f"site:finviz.com undervalued {region} low float",
+        f"site:koyfin.com OR site:simplywall.st undervalued micro cap {region}"
     ]
+    
+    seen_list = list(load_memory().keys())
+    
     try:
         search_results = brave_market_search(random.choice(base_queries))
-        raw = llm.invoke(f"Extract single MICRO-CAP ticker in {region} from: {str(search_results)[:2000]}").content
+        prompt = f"""
+        Extract the single most interesting MICRO-CAP stock ticker in {region} from this text: 
+        {str(search_results)[:2000]}
+        
+        CRITICAL: Do NOT return any of these recently analyzed tickers: {seen_list}
+        Output ONLY the raw ticker symbol.
+        """
+        raw = llm.invoke(prompt).content
         ticker = extract_ticker_from_text(raw)
         if ticker != "NONE": ticker = resolve_ticker_suffix(ticker, region)
-        return {"ticker": ticker}
-    except: return {"ticker": "NONE"}
+        return {"ticker": ticker, "manual_search": False}
+    except: return {"ticker": "NONE", "manual_search": False}
 
 def gatekeeper_node(state):
     ticker = state.get('ticker', 'NONE')
     retries = state.get('retry_count', 0)
     
     if ticker == "NONE":
-        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": "No ticker found"}}
+        return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": "Scout found no readable ticker."}}
+
+    mark_ticker_seen(ticker)
 
     try:
         stock = yf.Ticker(ticker)
         raw_info = stock.info
         
-        # 🚨 THE DATA DIET: Extract only what we need, then delete raw_info to prevent Memory Crashes
+        # 🚨 THE DATA DIET
         lean_info = {
             'currentPrice': raw_info.get('currentPrice', 0) or raw_info.get('regularMarketPrice', 0),
             'trailingEps': raw_info.get('trailingEps', 0),
@@ -120,16 +158,17 @@ def gatekeeper_node(state):
             'sector': raw_info.get('sector', 'Unknown')
         }
         del raw_info 
-        gc.collect() # Force immediate RAM cleanup
+        gc.collect() 
 
         price = lean_info['currentPrice']
         mkt_cap = lean_info['marketCap']
         
-        # Price & Cap Filters
+        # UI Safety Soft Reject
         if price > MAX_PRICE_PER_SHARE:
-            return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"Price ${price} > ${MAX_PRICE_PER_SHARE}"}}
+            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Price ${price} exceeds ${MAX_PRICE_PER_SHARE} limit."}
+        
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
-            return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"Cap ${mkt_cap:,.0f} out of bounds"}}
+            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range."}
 
         return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info}
     except Exception as e:
@@ -138,6 +177,12 @@ def gatekeeper_node(state):
 def analyst_node(state):
     ticker = state['ticker']
     info = state.get('financial_data', {})
+    
+    # UI Rejection Explanation Fallback
+    if state.get('status') == "FAIL":
+        reason = state.get('final_report', info.get('reason', 'Failed basic criteria.'))
+        verdict = f"### ❌ REJECTED BY GATEKEEPER\n**Reason:** {reason}\n\n*The data for {ticker} was retrieved, but it does not fit the PrimoGreedy small-cap profile.*"
+        return {"final_verdict": verdict, "final_report": verdict}
     
     price = info.get('currentPrice', 0)
     eps = info.get('trailingEps', 0)
@@ -159,14 +204,29 @@ def analyst_node(state):
     
     prompt = f"""
     Act as a Senior Financial Broker evaluating {state.get('company_name')} ({ticker}).
-    STRATEGY: {strategy}
-    DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {ebitda}
-    CONTEXT: {thesis}
+    
+    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {ebitda}
+    QUANTITATIVE THESIS: {thesis}
     NEWS: {str(news)[:1500]}
     
-    OUTPUT:
-    VERDICT: STRONG BUY / BUY / WATCH / AVOID
-    RATIONALE: Max 3 sentences weighing Graham valuation/Assets against News.
+    Your task is to write a highly structured investment memo combining strict Graham Value math with qualitative analysis. Do not use fluff or buzzwords.
+    
+    Format your response EXACTLY like this:
+    
+    ### 🧮 THE QUANTITATIVE BASE (Graham / Asset Play)
+    * State the current Price vs the calculated {strategy} valuation.
+    * Briefly explain if the math supports a margin of safety.
+    
+    ### 🟢 THE LYNCH PITCH (Why I would own this)
+    * **The Core Mechanism:** In one sentence, how does this company actually make money?
+    * **The Catalyst:** Based on the news, what is the ONE simple reason this stock could run?
+    
+    ### 🔴 THE MUNGER INVERT (How I could lose money)
+    * **Structural Weakness:** What is the most likely way an investor loses money here?
+    * **The Bear Evidence:** What exact metric, news, or math would prove the bear case right?
+    
+    ### ⚖️ FINAL VERDICT
+    STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
     """
     verdict = llm.invoke(prompt).content if llm else f"Strategy: {strategy}"
     return {"final_verdict": verdict, "final_report": verdict}
@@ -180,12 +240,16 @@ workflow.add_node("analyst", analyst_node)
 workflow.set_entry_point("scout")
 
 def check_status(state):
-    if state.get('is_small_cap'): return "analyst"
-    if state.get('retry_count', 0) > MAX_RETRIES: return END
+    # Route manual searches straight to the analyst to render the UI rejection
+    if state.get('manual_search'): return "analyst"
+    # Route successful finds to the analyst
+    if state.get('status') == "PASS": return "analyst"
+    # Route final failures to the analyst so emails explain what went wrong
+    if state.get('retry_count', 0) >= MAX_RETRIES: return "analyst"
     return "scout"
 
 workflow.add_edge("scout", "gatekeeper")
-workflow.add_conditional_edges("gatekeeper", check_status, {"analyst": "analyst", "scout": "scout", END: END})
+workflow.add_conditional_edges("gatekeeper", check_status, {"analyst": "analyst", "scout": "scout"})
 workflow.add_edge("analyst", END)
 
 app = workflow.compile()
