@@ -48,3 +48,9 @@ yarl==1.22.0
 zstandard==0.25.0
 finnhub-python
 langchain-community
+langchain-openai
+chainlit
+langgraph
+resend
+yfinance
+matplotlib
