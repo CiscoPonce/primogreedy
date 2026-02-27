@@ -1,3 +1,13 @@
+---
+title: PrimoGreedy Agent
+emoji: 💸
+colorFrom: green
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # 🕵️‍♂️ PrimoGreedy Agent
 
 **PrimoGreedy** is an automated, AI-driven financial analysis agent designed to hunt, filter, and evaluate Micro-Cap and Small-Cap stocks. It acts as a ruthless "Logic Firewall," aggressively rejecting high-debt, cash-burning, and overvalued companies before deploying a ReAct (Reasoning and Acting) LLM to write highly structured fundamental investment memos.
