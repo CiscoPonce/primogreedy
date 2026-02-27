@@ -10,63 +10,51 @@ async def start():
     welcome_msg = """
     👋 **PrimoGreedy v6.0: Auto-Pilot**
     
-    **Commands:**
-    1. `AUTO` -> 🧠 Smart Scan
-    2. `@Handle` -> 🕵️‍♂️ Social Scout
-    3. `NVDA` -> 🔎 Single Scout
-    4. Ask a question -> 💬 Chat with Agent
+    **Try these commands:**
+    1. `AUTO` -> 🧠 **Smart Scan** (Finds trending stocks & filters them)
+    2. `@Handle` -> 🕵️‍♂️ **Social Scout** (e.g., `@DeItaone`)
+    3. `NVDA` -> 🔎 **Single Scout**
     """
     await cl.Message(content=welcome_msg).send()
 
 @cl.on_message
 async def main(message: cl.Message):
-    user_input = message.content.strip()
+    user_input = message.content.strip().upper()
+    tickers = []
     
-    # 1. HANDLE AUTO
-    if user_input.upper() == "AUTO":
+    if user_input == "AUTO":
         await cl.Message(content="📡 **Scanning Global Markets...**").send()
         tickers = await cl.make_async(get_trending_stocks)()
         if not tickers:
             await cl.Message(content="❌ No trending data.").send()
             return
         await cl.Message(content=f"🔥 **Hot List:** {', '.join(tickers)}").send()
-        return
 
-    # 2. HANDLE SOCIAL SCOUT
-    if user_input.startswith("@"):
+    elif user_input.startswith("@"):
         handle = user_input.replace("@", "")
         await cl.Message(content=f"🕵️‍♂️ Scouting **@{handle}**...").send()
         tickers = await cl.make_async(fetch_tickers_from_social)(handle)
         if not tickers:
             await cl.Message(content="❌ No tickers found.").send()
-        return
+            return
+            
+    else:
+        raw_list = user_input.replace(",", " ").split()
+        tickers = [t for t in raw_list if len(t) <= 5 and t.isalpha()]
+        if not tickers: tickers = [user_input]
 
-    # 🚨 3. BULLETPROOF CHAT ROUTING (If it has a space, it is a chat)
-    if " " in user_input:
-        await cl.Message(content="💬 **Consulting Senior Broker...**").send()
-        try:
-            config = {"configurable": {"thread_id": "ui_session"}}
-            # Route to LangGraph chat_node
-            result = await app.ainvoke({"ticker": user_input, "retry_count": 0, "manual_search": False}, config=config)
-            report = result.get('final_report', "No response generated.")
-            await cl.Message(content=f"🤖 **Agent:**\n\n{report}").send()
-        except Exception as e:
-            await cl.Message(content=f"⚠️ Chat Error: {str(e)}").send()
-        return
-
-    # 4. HANDLE SINGLE OR COMMA-SEPARATED TICKERS
-    raw_list = user_input.upper().replace(",", " ").split()
-    tickers = [t for t in raw_list if len(t) <= 5 and t.isalpha()]
-    if not tickers: tickers = [user_input.upper()]
-
+    # --- EXECUTION LOOP ---
     for ticker in tickers:
-        await cl.Message(content=f"--- 🔎 **Processing:** {ticker} ---").send()
+        if len(ticker) > 5 and len(tickers) > 1: continue
+
+        await cl.Message(content=f"--- 🔎 **Checking {ticker}** ---").send()
+        
         try:
-            config = {"configurable": {"thread_id": "ui_session"}}
-            result = await app.ainvoke({"ticker": ticker, "retry_count": 0, "manual_search": True}, config=config)
+            # We pass the ticker to bypass the random 'scout'
+            result = await app.ainvoke({"ticker": ticker, "retry_count": 0})
             
             status = result.get('status')
-            report = result.get('final_report', "No report generated.")
+            report = result.get('final_report')
             chart_bytes = result.get('chart_data')
             
             elements = []
@@ -74,14 +62,19 @@ async def main(message: cl.Message):
                 elements.append(cl.Image(content=chart_bytes, name=f"{ticker}_chart", display="inline"))
 
             if status == "FAIL":
-                response = f"{report}\n\n*Chart provided for visual reference.*"
+                response = f"❌ **REJECTED**: {result.get('financial_data', {}).get('reason')}"
             else:
-                response = f"✅ **PASSED FIREWALL**\n\n{report}"
+                response = f"✅ **PASSED FIREWALL**\n{report}"
 
             await cl.Message(content=response, elements=elements).send()
             
         except Exception as e:
             await cl.Message(content=f"⚠️ Error on {ticker}: {str(e)}").send()
+            
         finally:
-            plt.close('all')
+            # 🚨 MEMORY FIX: Close charts and purge RAM after every loop
+            plt.close('all') 
+            result = None
+            elements = []
+            chart_bytes = None
             gc.collect()

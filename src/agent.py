@@ -12,6 +12,26 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.llm import get_llm
+import io
+import matplotlib.pyplot as plt
+
+def generate_chart(ticker: str) -> bytes:
+    """Generates a 6-month price chart in memory."""
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="6mo")
+        if hist.empty: return None
+        plt.figure(figsize=(6, 4))
+        plt.plot(hist.index, hist['Close'], color='#00a1ff', linewidth=1.5)
+        plt.title(f"{ticker} - 6 Month Price Action")
+        plt.grid(True, linestyle='--', alpha=0.6)
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        plt.close('all')
+        return buf.getvalue()
+    except:
+        return None
 
 # --- INLINE SEARCH TOOL ---
 def brave_market_search(query: str) -> str:
@@ -189,12 +209,15 @@ def gatekeeper_node(state):
         fcf = lean_info['freeCashflow']
         cash = lean_info['totalCash']
         
+        # 🚨 FIX: Generate the chart before returning so it is always included
+        chart_bytes = generate_chart(ticker)
+        
         # UI Safety Soft Reject
         if price > MAX_PRICE_PER_SHARE:
-            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Price ${price} exceeds ${MAX_PRICE_PER_SHARE} limit."}
+            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Price ${price} exceeds ${MAX_PRICE_PER_SHARE} limit.", "chart_data": chart_bytes}
         
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
-            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range."}
+            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range.", "chart_data": chart_bytes}
 
         # 🚨 UPGRADE 2: THE ZOMBIE FILTER (Cash Runway)
         if fcf is not None and cash is not None and fcf < 0:
@@ -202,20 +225,22 @@ def gatekeeper_node(state):
             if yearly_burn > 0:
                 runway_years = cash / yearly_burn
                 if runway_years < 0.5: # Less than 6 months of cash remaining
-                    return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"⚠️ **ZOMBIE RISK:** This company is burning cash and has less than 6 months of runway left. High risk of immediate share dilution."}
+                    return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"⚠️ **ZOMBIE RISK:** This company is burning cash and has less than 6 months of runway left. High risk of immediate share dilution.", "chart_data": chart_bytes}
 
-        return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info}
+        # Passing state includes the chart
+        return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "chart_data": chart_bytes}
     except Exception as e:
         return {"is_small_cap": False, "status": "FAIL", "retry_count": retries + 1, "financial_data": {"reason": f"API Error: {str(e)}"}}
 
 def analyst_node(state):
     ticker = state['ticker']
     info = state.get('financial_data', {})
+    chart_bytes = state.get('chart_data') # Retrieve chart from Gatekeeper
     
     if state.get('status') == "FAIL":
         reason = state.get('final_report', info.get('reason', 'Failed basic criteria.'))
         verdict = f"### ❌ REJECTED BY GATEKEEPER\n**Reason:** {reason}\n\n*The data for {ticker} was retrieved, but it does not fit the PrimoGreedy small-cap profile.*"
-        return {"final_verdict": verdict, "final_report": verdict}
+        return {"final_verdict": verdict, "final_report": verdict, "chart_data": chart_bytes}
     
     price = info.get('currentPrice', 0)
     eps = info.get('trailingEps', 0)
@@ -261,7 +286,8 @@ def analyst_node(state):
     STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
     """
     verdict = llm.invoke(prompt).content if llm else f"Strategy: {strategy}"
-    return {"final_verdict": verdict, "final_report": verdict}
+    # Ensure chart data is passed along in the final response
+    return {"final_verdict": verdict, "final_report": verdict, "chart_data": chart_bytes}
 
 # --- GRAPH BUILDER ---
 workflow = StateGraph(AgentState)
@@ -272,9 +298,9 @@ workflow.add_node("analyst", analyst_node)
 
 def initial_routing(state):
     """🚨 UPGRADE 3: Direct traffic at the very beginning."""
-    query = state.get('ticker', '')
-    # If the user typed a full sentence with spaces, route to conversational Chat node
-    if len(query.split()) > 3: return "chat"
+    query = str(state.get('ticker', ''))
+    # 🚨 FIX: If the user typed a space, it goes to the chat node instantly.
+    if " " in query: return "chat"
     return "scout"
 
 workflow.set_conditional_entry_point(initial_routing, {"chat": "chat", "scout": "scout"})

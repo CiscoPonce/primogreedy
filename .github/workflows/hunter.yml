@@ -2,22 +2,18 @@ name: Global Hunter Cron
 
 on:
   schedule:
-    # Runs at 06:00 AM UTC daily
     - cron: '0 6 * * *'
-  workflow_dispatch: # Manual Button
+  workflow_dispatch: 
 
 jobs:
   global-hunt:
     runs-on: ubuntu-latest
-    # 👇 CRITICAL UPDATE: Set this to 60 minutes
     timeout-minutes: 60
-    
-    # 🚨 CRITICAL NEW STEP: Grant the bot permission to push files to the repo
-    permissions:
-      contents: write
     
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} # Ensure GitHub Actions has permission to push
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,13 +38,11 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: PYTHONPATH=. python src/whale_hunter.py
 
-      # 🚨 CRITICAL NEW STEP: Save the memory file safely without crashing
+      # 🚨 NEW: Save the Agent's Memory back to the repository
       - name: Commit Exclusion Memory
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # Create an empty JSON file if the Scout didn't find anything, preventing Git crashes
-          if [ ! -f seen_tickers.json ]; then echo "{}" > seen_tickers.json; fi
           git add seen_tickers.json
-          git commit -m "🧠 Update Agent Memory Ledger" || echo "No changes to commit"
+          git commit -m "🧠 Update Agent Memory Ledger" || echo "No changes to commit (No new tickers seen)"
           git push

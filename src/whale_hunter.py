@@ -218,6 +218,11 @@ def email_node(state):
         body = f"Found no suitable Micro-Caps under ${MAX_PRICE_PER_SHARE} in {region} after {MAX_RETRIES+1} attempts."
     else:
         print(f"   📨 Sending Analysis for {ticker}...")
+        
+        if "AVOID" in verdict and "BUY" not in verdict and "WATCH" not in verdict:
+            print(f"   🚫 Verdict is AVOID. Skipping email alert for {ticker} to avoid noise.")
+            return {}
+
         subject = f"🧬 Micro-Cap Found ({region}): {ticker}"
         body = f"<h1>{ticker}</h1><h3>Cap: ${state.get('market_cap',0):,.0f}</h3><hr>{verdict.replace(chr(10), '<br>')}"
 
