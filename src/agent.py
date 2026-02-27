@@ -6,12 +6,11 @@ import gc
 import json
 import requests
 import yfinance as yf
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# Import your LLM tool
 from src.llm import get_llm
 
 # --- INLINE SEARCH TOOL ---
@@ -35,9 +34,25 @@ def brave_market_search(query: str) -> str:
 MEMORY_FILE = "seen_tickers.json"
 
 def load_memory():
+    """Loads memory and applies the 30-Day Amnesia Protocol."""
     if not os.path.exists(MEMORY_FILE): return {}
     try:
-        with open(MEMORY_FILE, "r") as f: return json.load(f)
+        with open(MEMORY_FILE, "r") as f:
+            mem = json.load(f)
+            
+        # 🚨 UPGRADE 1: THE AMNESIA PROTOCOL
+        now = datetime.now(timezone.utc)
+        cleaned_mem = {}
+        for ticker, timestamp in mem.items():
+            try:
+                past = datetime.fromisoformat(timestamp)
+                if (now - past) < timedelta(days=30):
+                    cleaned_mem[ticker] = timestamp
+            except: pass
+        
+        # Save the cleaned memory back to the file
+        with open(MEMORY_FILE, "w") as f: json.dump(cleaned_mem, f, indent=4)
+        return cleaned_mem
     except: return {}
 
 def mark_ticker_seen(ticker):
@@ -53,9 +68,7 @@ MIN_MARKET_CAP = 10_000_000
 MAX_PRICE_PER_SHARE = 30.00
 MAX_RETRIES = 1
 
-REGION_SUFFIXES = {
-    "USA": [""], "UK": [".L"], "Canada": [".TO", ".V"], "Australia": [".AX"]
-}
+REGION_SUFFIXES = {"USA": [""], "UK": [".L"], "Canada": [".TO", ".V"], "Australia": [".AX"]}
 
 # --- STATE MEMORY ---
 class AgentState(TypedDict):
@@ -70,7 +83,7 @@ class AgentState(TypedDict):
     status: str          
     final_report: str    
     chart_data: bytes    
-    manual_search: bool  # Tracks if the user typed this in the UI
+    manual_search: bool  
 
 llm = get_llm()
 
@@ -96,18 +109,28 @@ def resolve_ticker_suffix(raw_ticker: str, region: str) -> str:
     return raw_ticker
 
 # --- NODES ---
+def chat_node(state):
+    """🚨 UPGRADE 3: Dedicated UI Chat Node."""
+    user_query = state.get('ticker', '')
+    prompt = f"""
+    You are the Senior Broker AI for PrimoGreedy. Your team member just asked you this question:
+    "{user_query}"
+    
+    Answer them directly, professionally, and concisely. If they are asking about financial metrics or how you work, explain your quantitative Graham and Deep Value frameworks.
+    """
+    response = llm.invoke(prompt).content if llm else "I am offline right now."
+    return {"final_report": response, "status": "CHAT"}
+
 def scout_node(state):
     region = state.get('region', 'USA')
     retries = state.get('retry_count', 0)
     
-    # Skip scouting if manually entered in UI
     is_manual = bool(state.get('ticker') and state['ticker'] != "NONE" and retries == 0)
     if is_manual:
         return {"ticker": resolve_ticker_suffix(state['ticker'], region), "manual_search": True}
 
     if retries > 0: time.sleep(2)
     
-    # High-Fidelity Signal Queries
     base_queries = [
         f"site:twitter.com/DeItaone OR site:twitter.com/unusual_whales breaking {region} ticker",
         f"site:twitter.com/eWhispers {region} earnings expectations",
@@ -148,20 +171,23 @@ def gatekeeper_node(state):
         stock = yf.Ticker(ticker)
         raw_info = stock.info
         
-        # 🚨 THE DATA DIET
         lean_info = {
             'currentPrice': raw_info.get('currentPrice', 0) or raw_info.get('regularMarketPrice', 0),
             'trailingEps': raw_info.get('trailingEps', 0),
             'bookValue': raw_info.get('bookValue', 0),
             'marketCap': raw_info.get('marketCap', 0),
             'ebitda': raw_info.get('ebitda', 0),
-            'sector': raw_info.get('sector', 'Unknown')
+            'sector': raw_info.get('sector', 'Unknown'),
+            'freeCashflow': raw_info.get('freeCashflow', 0),
+            'totalCash': raw_info.get('totalCash', 0)
         }
         del raw_info 
         gc.collect() 
 
         price = lean_info['currentPrice']
         mkt_cap = lean_info['marketCap']
+        fcf = lean_info['freeCashflow']
+        cash = lean_info['totalCash']
         
         # UI Safety Soft Reject
         if price > MAX_PRICE_PER_SHARE:
@@ -169,6 +195,14 @@ def gatekeeper_node(state):
         
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
             return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range."}
+
+        # 🚨 UPGRADE 2: THE ZOMBIE FILTER (Cash Runway)
+        if fcf is not None and cash is not None and fcf < 0:
+            yearly_burn = abs(fcf)
+            if yearly_burn > 0:
+                runway_years = cash / yearly_burn
+                if runway_years < 0.5: # Less than 6 months of cash remaining
+                    return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"⚠️ **ZOMBIE RISK:** This company is burning cash and has less than 6 months of runway left. High risk of immediate share dilution."}
 
         return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info}
     except Exception as e:
@@ -178,7 +212,6 @@ def analyst_node(state):
     ticker = state['ticker']
     info = state.get('financial_data', {})
     
-    # UI Rejection Explanation Fallback
     if state.get('status') == "FAIL":
         reason = state.get('final_report', info.get('reason', 'Failed basic criteria.'))
         verdict = f"### ❌ REJECTED BY GATEKEEPER\n**Reason:** {reason}\n\n*The data for {ticker} was retrieved, but it does not fit the PrimoGreedy small-cap profile.*"
@@ -190,7 +223,6 @@ def analyst_node(state):
     ebitda = info.get('ebitda', 0)
     sector = info.get('sector', 'Unknown')
     
-    # 🧠 SENIOR BROKER LOGIC
     if eps > 0 and book_value > 0:
         strategy = "GRAHAM VALUE"
         valuation = (22.5 * eps * book_value) ** 0.5
@@ -233,21 +265,27 @@ def analyst_node(state):
 
 # --- GRAPH BUILDER ---
 workflow = StateGraph(AgentState)
+workflow.add_node("chat", chat_node)
 workflow.add_node("scout", scout_node)
 workflow.add_node("gatekeeper", gatekeeper_node)
 workflow.add_node("analyst", analyst_node)
 
-workflow.set_entry_point("scout")
+def initial_routing(state):
+    """🚨 UPGRADE 3: Direct traffic at the very beginning."""
+    query = state.get('ticker', '')
+    # If the user typed a full sentence with spaces, route to conversational Chat node
+    if len(query.split()) > 3: return "chat"
+    return "scout"
+
+workflow.set_conditional_entry_point(initial_routing, {"chat": "chat", "scout": "scout"})
 
 def check_status(state):
-    # Route manual searches straight to the analyst to render the UI rejection
     if state.get('manual_search'): return "analyst"
-    # Route successful finds to the analyst
     if state.get('status') == "PASS": return "analyst"
-    # Route final failures to the analyst so emails explain what went wrong
     if state.get('retry_count', 0) >= MAX_RETRIES: return "analyst"
     return "scout"
 
+workflow.add_edge("chat", END)
 workflow.add_edge("scout", "gatekeeper")
 workflow.add_conditional_edges("gatekeeper", check_status, {"analyst": "analyst", "scout": "scout"})
 workflow.add_edge("analyst", END)
