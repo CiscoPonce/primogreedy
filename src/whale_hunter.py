@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 # Import tools
 import yfinance as yf
 from src.llm import get_llm
-from src.finance_tools import check_financial_health
+from src.finance_tools import check_financial_health, get_insider_sentiment, get_company_news, get_basic_financials
 from src.email_utils import send_email_report
 from src.agent import brave_market_search
 
@@ -157,6 +157,9 @@ def gatekeeper_node(state):
 
 def analyst_node(state):
     """
+    🧠 THE SENIOR BROKER (ReAct Agent Upgrade)
+    Now equipped with Finnhub tools for deep fundamental research.
+    """
     🧠 THE SENIOR BROKER
     Evaluates Profitable stocks using Graham Number.
     Evaluates Unprofitable stocks (Miners/Biotech) using Asset Value.
@@ -183,14 +186,36 @@ def analyst_node(state):
 
     news = brave_market_search(f"{ticker} stock analysis catalysts")
     
+    region = state.get('region', 'USA')
+    
     prompt = f"""
     Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
     
     HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
     QUANTITATIVE THESIS: {thesis}
-    NEWS: {news}
+    """
     
-    Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis. Do not use fluff or buzzwords.
+    # 🟢 NEW: Agentic Tool Calling Loop for USA Stocks
+    if llm and region == 'USA' and "." not in ticker:
+        print(f"   🤖 Agent '{ticker}' is researching Finnhub databases...")
+        tools = [get_insider_sentiment, get_company_news, get_basic_financials]
+        llm_with_tools = llm.bind_tools(tools)
+        
+        # We manually invoke the tools here for the specific ticker to gather context before writing the memo
+        context = ""
+        try:
+            context += get_insider_sentiment.invoke({"ticker": ticker}) + "\n"
+            context += get_company_news.invoke({"ticker": ticker}) + "\n"
+            context += get_basic_financials.invoke({"ticker": ticker}) + "\n"
+            prompt += f"\nDEEP FUNDAMENTALS (FINNHUB):\n{context}\n"
+        except Exception as e:
+            print(f"   ⚠️ Tool error: {e}")
+            prompt += f"\nNEWS (Fallback): {news}\n"
+    else:
+        prompt += f"\nNEWS: {str(news)[:1500]}\n"
+    
+    prompt += f"""
+    Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis and recent insider behavior/news. Do not use fluff or buzzwords.
     
     Format your response EXACTLY like this:
     
@@ -199,11 +224,11 @@ def analyst_node(state):
     * Briefly explain if the math supports a margin of safety.
     
     ### 🟢 THE LYNCH PITCH (Why I would own this)
-    * **The Core Mechanism:** In one sentence, how does this company actually make money?
+    * **The Core Action:** In one sentence, what are insiders doing (buying/selling/neutral)? 
     * **The Catalyst:** Based on the news, what is the ONE simple reason this stock could run?
     
     ### 🔴 THE MUNGER INVERT (How I could lose money)
-    * **Structural Weakness:** What is the most likely way an investor loses money here?
+    * **Structural Weakness:** What is the most likely way an investor loses money here based on fundamentals/news?
     * **The Bear Evidence:** What exact metric, news, or math would prove the bear case right?
     
     ### ⚖️ FINAL VERDICT

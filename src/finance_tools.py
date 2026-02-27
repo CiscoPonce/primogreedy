@@ -1,4 +1,7 @@
 import yfinance as yf
+import os
+import finnhub
+from langchain_core.tools import tool
 
 # --- CONFIGURATION: SECTOR SPECIFIC RULES ---
 SECTOR_CONFIG = {
@@ -56,9 +59,6 @@ def check_financial_health(ticker):
         current_price = info.get('currentPrice', 0)
         currency = info.get('currency', 'USD')
         
-        # Yahoo Finance often reports UK stocks (LSE) in Pence (GBX)
-        # But we need Pounds (GBP) to match the Intrinsic Value.
-        # Logic: If it ends in .L OR currency is GBX/GBp, divide by 100.
         if ticker.endswith(".L") or currency == "GBp" or currency == "GBX":
             current_price = current_price / 100
         
@@ -77,19 +77,18 @@ def check_financial_health(ticker):
                 net_debt_ebitda = (debt - cash) / ebitda
                 if net_debt_ebitda > config['debt_max']:
                     return {"status": "FAIL", "reason": f"Sector Reject: Debt/EBITDA {round(net_debt_ebitda, 2)}x > {config['debt_max']}x"}
-# --- 3. INTRINSIC VALUE CALCULATION ---
+
+        # --- 3. INTRINSIC VALUE CALCULATION ---
         intrinsic_val = calculate_graham_number(info)
         
         margin_of_safety = "N/A"
         
         if intrinsic_val > 0 and current_price > 0:
-            # Calculate Margin
             raw_margin = (intrinsic_val - current_price) / intrinsic_val * 100
             margin_of_safety = f"{round(raw_margin, 1)}%"
         elif intrinsic_val == 0:
              margin_of_safety = "No Value (Unprofitable)"
 
-        # Format Debt for display
         debt_equity_raw = info.get('debtToEquity', 0)
         debt_equity_str = f"{debt_equity_raw}%" if debt_equity_raw else "N/A"
         
@@ -103,11 +102,7 @@ def check_financial_health(ticker):
             "peg_ratio": info.get('pegRatio', 'N/A')
         }
 
-        # 🟢 SMART VERDICT LOGIC 🟢
-        # If the company is technically solvent (has cash) but loses money (No Value),
-        # we flag it clearly in the Verdict so it matches the AI Analyst.
         final_verdict = f"Solvent. Sector: {sector}."
-        
         if intrinsic_val == 0:
             final_verdict = f"Unprofitable (Avoid). Sector: {sector}."
 
@@ -119,3 +114,90 @@ def check_financial_health(ticker):
         
     except Exception as e:
         return {"status": "PASS", "reason": f"Data Warning: {str(e)}", "metrics": {}}
+
+# --- FINNHUB API TOOLS ---
+def get_finnhub_client():
+    api_key = os.getenv("FINNHUB_API_KEY")
+    if not api_key:
+        raise ValueError("FINNHUB_API_KEY environment variable not set.")
+    return finnhub.Client(api_key=api_key)
+
+@tool
+def get_insider_sentiment(ticker: str) -> str:
+    """
+    Fetch recent insider sentiment and trading behavior for a US stock.
+    Returns information on whether company executives are buying or selling shares.
+    """
+    import requests
+    try:
+        if "." in ticker: return f"Insider extraction not supported for non-US ticker {ticker}."
+        api_key = os.getenv("FINNHUB_API_KEY")
+        if not api_key: return "API Key missing."
+        
+        url = f"https://finnhub.io/api/v1/stock/insider-sentiment?symbol={ticker}&from=2024-01-01&to=2026-12-31&token={api_key}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if 'data' not in data or len(data['data']) == 0:
+            return f"No recent insider sentiment data found for {ticker}."
+            
+        recent = data['data'][0] # Most recent month available
+        msp = recent.get('mspr', 0)
+        
+        sentiment = "Neutral"
+        if msp > 0: sentiment = "Positive (Insiders are Buying)"
+        elif msp < 0: sentiment = "Negative (Insiders are Selling)"
+            
+        return f"Insider Sentiment for {ticker}: {sentiment}. MSPR Score: {msp}."
+    except Exception as e:
+        return f"Error fetching insider data: {str(e)}"
+
+@tool
+def get_company_news(ticker: str) -> str:
+    """
+    Fetch the top 3 most recent financial news headlines for a US stock.
+    Useful for finding catalysts or understanding recent price movements.
+    """
+    from datetime import datetime, timedelta
+    try:
+        if "." in ticker: return f"News extraction not supported via Finnhub for non-US ticker {ticker}."
+        client = get_finnhub_client()
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        
+        news = client.company_news(ticker, _from=start_date, to=end_date)
+        if not news:
+            return f"No recent news found for {ticker}."
+            
+        headlines = []
+        for i, article in enumerate(news[:3]):
+            headlines.append(f"{i+1}. {article.get('headline', 'No Headline')} - {article.get('summary', '')}")
+            
+        return f"Recent News for {ticker}:\n" + "\n".join(headlines)
+    except Exception as e:
+        return f"Error fetching news: {str(e)}"
+
+@tool
+def get_basic_financials(ticker: str) -> str:
+    """
+    Fetch deep fundamental metrics for a US stock, including 52-week highs/lows, 
+    beta, gross margin, and return on equity (ROE).
+    """
+    try:
+        if "." in ticker: return f"Deep fundamentals not supported via Finnhub for non-US ticker {ticker}."
+        client = get_finnhub_client()
+        data = client.company_basic_financials(ticker, 'all')
+        if not data or 'metric' not in data:
+            return f"No fundamental data found for {ticker}."
+            
+        metrics = data['metric']
+        report = f"Fundamentals for {ticker}:\n"
+        report += f"- 52 Week High: ${metrics.get('52WeekHigh', 'N/A')}\n"
+        report += f"- 52 Week Low: ${metrics.get('52WeekLow', 'N/A')}\n"
+        report += f"- Beta (Volatility vs Market): {metrics.get('beta', 'N/A')}\n"
+        report += f"- Gross Margin TTM: {metrics.get('grossMarginTTM', 'N/A')}%\n"
+        report += f"- Return On Equity (ROE) TTM: {metrics.get('roeTTM', 'N/A')}%\n"
+        
+        return report
+    except Exception as e:
+        return f"Error fetching financials: {str(e)}"
