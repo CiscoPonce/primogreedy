@@ -184,24 +184,34 @@ def analyst_node(state):
     news = brave_market_search(f"{ticker} stock analysis catalysts")
     
     prompt = f"""
-    Act as a Senior Financial Broker. Analyze {state.get('company_name', ticker)} ({ticker}).
+    Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
     
-    STRATEGY: {strategy}
-    DATA: Price: ${price} | EPS: {eps} | Book Value/Share: {book_value}
-    CONTEXT: {thesis}
+    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
+    QUANTITATIVE THESIS: {thesis}
     NEWS: {news}
     
-    DECISION LOGIC:
-    1. If Strategy is GRAHAM: Is it cheap relative to earnings?
-    2. If Strategy is ASSET PLAY: Is the company going bankrupt, or is the land/cash real?
+    Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis. Do not use fluff or buzzwords.
     
-    OUTPUT:
-    VERDICT: STRONG BUY / BUY / WATCH / AVOID
-    RATIONALE: Max 3 sentences weighing Valuation vs News.
+    Format your response EXACTLY like this:
+    
+    ### 🧮 THE QUANTITATIVE BASE (Graham / Asset Play)
+    * State the current Price vs the calculated {strategy} valuation.
+    * Briefly explain if the math supports a margin of safety.
+    
+    ### 🟢 THE LYNCH PITCH (Why I would own this)
+    * **The Core Mechanism:** In one sentence, how does this company actually make money?
+    * **The Catalyst:** Based on the news, what is the ONE simple reason this stock could run?
+    
+    ### 🔴 THE MUNGER INVERT (How I could lose money)
+    * **Structural Weakness:** What is the most likely way an investor loses money here?
+    * **The Bear Evidence:** What exact metric, news, or math would prove the bear case right?
+    
+    ### ⚖️ FINAL VERDICT
+    STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
     """
     
     if llm:
-        verdict = llm.invoke([SystemMessage(content="You are a skeptical Value Investor."), HumanMessage(content=prompt)]).content
+        verdict = llm.invoke(prompt).content
     else: 
         verdict = "No AI Analysis available."
     
@@ -218,11 +228,6 @@ def email_node(state):
         body = f"Found no suitable Micro-Caps under ${MAX_PRICE_PER_SHARE} in {region} after {MAX_RETRIES+1} attempts."
     else:
         print(f"   📨 Sending Analysis for {ticker}...")
-        
-        if "AVOID" in verdict and "BUY" not in verdict and "WATCH" not in verdict:
-            print(f"   🚫 Verdict is AVOID. Skipping email alert for {ticker} to avoid noise.")
-            return {}
-
         subject = f"🧬 Micro-Cap Found ({region}): {ticker}"
         body = f"<h1>{ticker}</h1><h3>Cap: ${state.get('market_cap',0):,.0f}</h3><hr>{verdict.replace(chr(10), '<br>')}"
 

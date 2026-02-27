@@ -54,5 +54,6 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "🧠 Update Agent Memory Ledger"
+            git pull --rebase origin main
             git push
           fi
