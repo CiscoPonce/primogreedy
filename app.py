@@ -30,19 +30,18 @@ async def main(message: cl.Message):
             await cl.Message(content="❌ No trending data.").send()
             return
         await cl.Message(content=f"🔥 **Hot List:** {', '.join(tickers)}").send()
-        return
 
     # 2. HANDLE SOCIAL SCOUT
-    if user_input.startswith("@"):
+    elif user_input.startswith("@"):
         handle = user_input.replace("@", "")
         await cl.Message(content=f"🕵️‍♂️ Scouting **@{handle}**...").send()
         tickers = await cl.make_async(fetch_tickers_from_social)(handle)
         if not tickers:
             await cl.Message(content="❌ No tickers found.").send()
-        return
+            return
 
     # 🚨 3. BULLETPROOF CHAT ROUTING (If it has a space, it is a chat)
-    if " " in user_input:
+    elif " " in user_input:
         await cl.Message(content="💬 **Consulting Senior Broker...**").send()
         try:
             config = {"configurable": {"thread_id": "ui_session"}}
@@ -55,13 +54,14 @@ async def main(message: cl.Message):
         return
 
     # 4. HANDLE SINGLE OR COMMA-SEPARATED TICKERS
-    # Don't replace spaces natively, only commas if multiple tickers are passed
-    raw_list = user_input.upper().replace(",", " ").split()
-    tickers = [t for t in raw_list if len(t) <= 5 and t.isalpha()]
-    
-    # If no valid tickers were found but it wasn't a chat message (no spaces), try the raw input
-    if not tickers and " " not in user_input: 
-        tickers = [user_input.upper()]
+    else:
+        # Don't replace spaces natively, only commas if multiple tickers are passed
+        raw_list = user_input.upper().replace(",", " ").split()
+        tickers = [t for t in raw_list if len(t) <= 5 and t.isalpha()]
+        
+        # If no valid tickers were found but it wasn't a chat message (no spaces), try the raw input
+        if not tickers and " " not in user_input: 
+            tickers = [user_input.upper()]
 
     for ticker in tickers:
         await cl.Message(content=f"--- 🔎 **Processing:** {ticker} ---").send()
