@@ -12,7 +12,8 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.llm import get_llm
-from src.finance_tools import get_insider_sentiment, get_company_news, get_basic_financials
+from src.finance_tools import check_financial_health, get_insider_sentiment, get_company_news, get_basic_financials
+from src.portfolio_tracker import record_paper_trade
 import io
 import matplotlib.pyplot as plt
 
@@ -220,13 +221,10 @@ def gatekeeper_node(state):
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
             return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range.", "chart_data": chart_bytes}
 
-        # 🚨 UPGRADE 2: THE ZOMBIE FILTER (Cash Runway)
-        if fcf is not None and cash is not None and fcf < 0:
-            yearly_burn = abs(fcf)
-            if yearly_burn > 0:
-                runway_years = cash / yearly_burn
-                if runway_years < 0.5: # Less than 6 months of cash remaining
-                    return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"⚠️ **ZOMBIE RISK:** This company is burning cash and has less than 6 months of runway left. High risk of immediate share dilution.", "chart_data": chart_bytes}
+        # 🚨 UPGRADE 2: SECTOR-SPECIFIC HEALTH CHECK
+        health = check_financial_health(ticker, lean_info)
+        if health["status"] == "FAIL":
+            return {"market_cap": mkt_cap, "is_small_cap": False, "status": "FAIL", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "retry_count": retries + 1, "final_report": f"⚠️ **GATEKEEPER REJECT:** {health['reason']}", "chart_data": chart_bytes}
 
         # Passing state includes the chart
         return {"market_cap": mkt_cap, "is_small_cap": True, "status": "PASS", "company_name": stock.info.get('shortName', ticker), "financial_data": lean_info, "chart_data": chart_bytes}
@@ -313,6 +311,8 @@ def analyst_node(state):
     STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
     """
     verdict = llm.invoke(prompt).content if llm else f"Strategy: {strategy}"
+    record_paper_trade(ticker, price, verdict, source="Chainlit UI")
+    
     # Ensure chart data is passed along in the final response
     return {"final_verdict": verdict, "final_report": verdict, "chart_data": chart_bytes}
 

@@ -13,8 +13,9 @@ async def start():
     **Commands:**
     1. `AUTO` -> 🧠 Smart Scan
     2. `@Handle` -> 🕵️‍♂️ Social Scout
-    3. `NVDA` -> 🔎 Single Scout
-    4. Ask a question -> 💬 Chat with Agent
+    3. `PORTFOLIO` -> 📊 View Agent Track Record
+    4. `NVDA` -> 🔎 Single Scout
+    5. Ask a question -> 💬 Chat with Agent
     """
     await cl.Message(content=welcome_msg).send()
 
@@ -31,7 +32,15 @@ async def main(message: cl.Message):
             return
         await cl.Message(content=f"🔥 **Hot List:** {', '.join(tickers)}").send()
 
-    # 2. HANDLE SOCIAL SCOUT
+    # 2. HANDLE PORTFOLIO EVALUATION
+    elif user_input.upper() == "PORTFOLIO":
+        from src.portfolio_tracker import evaluate_portfolio
+        await cl.Message(content="📊 **Fetching live prices for the Agent's historical calls...**").send()
+        report = await cl.make_async(evaluate_portfolio)()
+        await cl.Message(content=report).send()
+        return
+
+    # 3. HANDLE SOCIAL SCOUT
     elif user_input.startswith("@"):
         handle = user_input.replace("@", "")
         await cl.Message(content=f"🕵️‍♂️ Scouting **@{handle}**...").send()

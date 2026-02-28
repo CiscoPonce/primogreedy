@@ -6,28 +6,31 @@ from langchain_core.tools import tool
 # --- CONFIGURATION: SECTOR SPECIFIC RULES ---
 SECTOR_CONFIG = {
     "Financial Services": {
-        "debt_metric": "debtToEquity", 
-        "val_metric": "priceToBook", 
-        "debt_max": 3.0, 
-        "exclude_ebitda": True 
-    },
-    "Real Estate": {
-        "debt_metric": "debtToEquity", 
-        "val_metric": "priceToBook", 
-        "debt_max": 2.5,
-        "exclude_ebitda": False 
+        "type": "bank",
+        "require_pb_under_one": True,
+        "check_debt": False,
+        "zombie_filter": False
     },
     "Technology": {
-        "debt_metric": "totalCash", 
-        "val_metric": "priceToFreeCashFlows", 
-        "debt_max": 100.0, 
-        "exclude_ebitda": False
+        "type": "growth",
+        "require_pb_under_one": False,
+        "check_debt": True,
+        "debt_max_ebitda": 3.5,
+        "zombie_filter": True
+    },
+    "Healthcare": {
+        "type": "growth",
+        "require_pb_under_one": False,
+        "check_debt": True,
+        "debt_max_ebitda": 3.5,
+        "zombie_filter": True
     },
     "Default": {
-        "debt_metric": "debtToEbitda", 
-        "val_metric": "forwardPE", 
-        "debt_max": 3.5, 
-        "exclude_ebitda": False
+        "type": "standard",
+        "require_pb_under_one": False,
+        "check_debt": True,
+        "debt_max_ebitda": 3.5,
+        "zombie_filter": False
     }
 }
 
@@ -47,40 +50,53 @@ def calculate_graham_number(info):
     except:
         return 0
 
-def check_financial_health(ticker):
+def check_financial_health(ticker, info):
+    """
+    Evaluates a company's financial health based on its sector.
+    Returns: {"status": "PASS"/"FAIL", "reason": "...", "metrics": {...}}
+    """
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info 
-        
         sector = info.get('sector', 'Default')
         config = SECTOR_CONFIG.get(sector, SECTOR_CONFIG['Default'])
         
-        # --- 🟢 FIX: FORCE UK CURRENCY NORMALIZATION ---
-        current_price = info.get('currentPrice', 0)
+        current_price = info.get('currentPrice', 0) or info.get('regularMarketPrice', 0)
         currency = info.get('currency', 'USD')
         
         if ticker.endswith(".L") or currency == "GBp" or currency == "GBX":
             current_price = current_price / 100
+            
+        # --- 1. SECTOR LOGIC: FINANCIAL SERVICES (BANKS) ---
+        if config["type"] == "bank":
+            pb_ratio = info.get('priceToBook', 0)
+            if config["require_pb_under_one"] and (pb_ratio is None or pb_ratio > 1.2): # 1.2 giving slight premium margin
+                return {"status": "FAIL", "reason": f"Financials Reject: Price/Book is {pb_ratio} (Needs to be near or under 1.0 for Graham safety)."}
+            current_ratio = info.get('currentRatio')
+            if current_ratio and current_ratio < 0.8:
+                return {"status": "FAIL", "reason": f"Bank Reject: Dangerously low liquidity (Current Ratio {current_ratio} < 0.8)"}
         
-        # --- 1. GRAHAM'S SOLVENCY CHECK ---
-        current_ratio = info.get('currentRatio')
-        if current_ratio and current_ratio < 1.0:
-            return {"status": "FAIL", "reason": f"Graham Reject: Liquidity Crisis (Current Ratio {current_ratio} < 1.0)"}
-
-        # --- 2. SECTOR SPECIFIC DEBT CHECK ---
-        if not config['exclude_ebitda']:
+        # --- 2. THE ZOMBIE FILTER (CASH RUNWAY FOR TECH/HEALTHCARE) ---
+        if config["zombie_filter"]:
+            fcf = info.get('freeCashflow', 0)
+            cash = info.get('totalCash', 0)
+            if fcf is not None and cash is not None and fcf < 0:
+                yearly_burn = abs(fcf)
+                if yearly_burn > 0:
+                    runway_years = cash / yearly_burn
+                    if runway_years < 0.5:
+                        return {"status": "FAIL", "reason": f"Zombie Reject: Burning cash with less than 6 months runway."}
+        
+        # --- 3. CLASSIC DEBT FILTER (INDUSTRIALS/DEFAULT) ---
+        if config["check_debt"] and config["type"] == "standard":
             ebitda = info.get('ebitda')
             debt = info.get('totalDebt')
             cash = info.get('totalCash')
-            
             if ebitda and debt and ebitda > 0:
-                net_debt_ebitda = (debt - cash) / ebitda
-                if net_debt_ebitda > config['debt_max']:
-                    return {"status": "FAIL", "reason": f"Sector Reject: Debt/EBITDA {round(net_debt_ebitda, 2)}x > {config['debt_max']}x"}
-
-        # --- 3. INTRINSIC VALUE CALCULATION ---
-        intrinsic_val = calculate_graham_number(info)
+                net_debt_ebitda = (debt - (cash or 0)) / ebitda
+                if net_debt_ebitda > config["debt_max_ebitda"]:
+                    return {"status": "FAIL", "reason": f"Debt Reject: Net Debt/EBITDA is {round(net_debt_ebitda, 2)}x > {config['debt_max_ebitda']}x"}
         
+        # --- 4. INTRINSIC VALUE & SAFETY MARGIN ---
+        intrinsic_val = calculate_graham_number(info)
         margin_of_safety = "N/A"
         
         if intrinsic_val > 0 and current_price > 0:
@@ -89,31 +105,17 @@ def check_financial_health(ticker):
         elif intrinsic_val == 0:
              margin_of_safety = "No Value (Unprofitable)"
 
-        debt_equity_raw = info.get('debtToEquity', 0)
-        debt_equity_str = f"{debt_equity_raw}%" if debt_equity_raw else "N/A"
-        
         metrics = {
             "sector": sector,
             "current_price": current_price,
-            "currency": currency,
             "intrinsic_value": round(intrinsic_val, 2),
-            "margin_of_safety": margin_of_safety,
-            "debt_to_equity": debt_equity_str,
-            "peg_ratio": info.get('pegRatio', 'N/A')
-        }
-
-        final_verdict = f"Solvent. Sector: {sector}."
-        if intrinsic_val == 0:
-            final_verdict = f"Unprofitable (Avoid). Sector: {sector}."
-
-        return {
-            "status": "PASS", 
-            "reason": final_verdict, 
-            "metrics": metrics
+            "margin_of_safety": margin_of_safety
         }
         
+        return {"status": "PASS", "reason": f"Passed {sector} Gatekeeper.", "metrics": metrics}
+        
     except Exception as e:
-        return {"status": "PASS", "reason": f"Data Warning: {str(e)}", "metrics": {}}
+         return {"status": "FAIL", "reason": f"Data Extraction Error: {str(e)}", "metrics": {}}
 
 # --- FINNHUB API TOOLS ---
 def get_finnhub_client():

@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import yfinance as yf
 from src.llm import get_llm
 from src.finance_tools import check_financial_health, get_insider_sentiment, get_company_news, get_basic_financials
+from src.portfolio_tracker import record_paper_trade
 from src.email_utils import send_email_report
 from src.agent import brave_market_search
 
@@ -142,7 +143,13 @@ def gatekeeper_node(state):
             print(f"   🚫 {ticker} Rejected — Cap ${mkt_cap:,.0f} out of range.")
             return {"is_small_cap": False, "retry_count": retries + 1}
 
-        print(f"   ✅ {ticker} Passed Gatekeeper (Price: ${price} | Cap: ${mkt_cap:,.0f})")
+        # 3. Sector-Specific Health Check
+        health = check_financial_health(ticker, info)
+        if health["status"] == "FAIL":
+            print(f"   🚫 {ticker} Rejected — {health['reason']}")
+            return {"is_small_cap": False, "retry_count": retries + 1}
+
+        print(f"   ✅ {ticker} Passed Gatekeeper (Price: ${price} | Cap: ${mkt_cap:,.0f} | Sector: {health['metrics'].get('sector', 'N/A')})")
         
         # We pass the full info dictionary to the Analyst so it can do the Two-Path logic
         return {
@@ -235,6 +242,7 @@ def analyst_node(state):
     
     if llm:
         verdict = llm.invoke(prompt).content
+        record_paper_trade(ticker, price, verdict, source="Morning Cron")
     else: 
         verdict = "No AI Analysis available."
     
