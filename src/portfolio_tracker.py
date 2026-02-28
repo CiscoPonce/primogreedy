@@ -11,16 +11,19 @@ def record_paper_trade(ticker, entry_price, verdict, source):
     """
     v_upper = verdict.strip().upper()
     
-    # Check if the verdict actually recommends a buy
-    is_buy = False
+    # Check if the verdict actually recommends a buy or watch
+    is_tracked = False
     if "STRONG BUY" in v_upper:
-        is_buy = True
+        is_tracked = True
         trade_type = "STRONG BUY"
     elif " BUY" in v_upper or v_upper.startswith("BUY"):
-        is_buy = True
+        is_tracked = True
         trade_type = "BUY"
+    elif "WATCH" in v_upper:
+        is_tracked = True
+        trade_type = "WATCH"
         
-    if not is_buy:
+    if not is_tracked:
         return
         
     try:
@@ -56,14 +59,14 @@ def evaluate_portfolio():
     Returns a formatted markdown string of the results.
     """
     if not os.path.exists(PORTFOLIO_FILE):
-        return "📉 **Paper Portfolio is empty.** The Agent hasn't found any Strong Buys yet!"
+        return "📉 **Paper Portfolio is empty.** The Agent hasn't tracked any stocks (Buy/Watch) yet!"
         
     try:
         with open(PORTFOLIO_FILE, "r") as f:
             portfolio = json.load(f)
             
         if not portfolio:
-            return "📉 **Paper Portfolio is empty.** The Agent hasn't found any Strong Buys yet!"
+            return "📉 **Paper Portfolio is empty.** The Agent hasn't tracked any stocks (Buy/Watch) yet!"
             
         total_roi = 0
         winning_trades = 0
