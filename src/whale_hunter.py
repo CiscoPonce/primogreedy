@@ -159,8 +159,6 @@ def analyst_node(state):
     """
     🧠 THE SENIOR BROKER (ReAct Agent Upgrade)
     Now equipped with Finnhub tools for deep fundamental research.
-    """
-    🧠 THE SENIOR BROKER
     Evaluates Profitable stocks using Graham Number.
     Evaluates Unprofitable stocks (Miners/Biotech) using Asset Value.
     """
