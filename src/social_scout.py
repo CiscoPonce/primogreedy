@@ -2,6 +2,7 @@ import os
 import requests
 import re
 import yfinance as yf
+from src.llm import get_llm
 
 # Map generic handles to "Searchable Real Names" for better results
 HANDLE_MAP = {
@@ -23,20 +24,20 @@ def fetch_tickers_from_social(handle: str):
         return []
 
     # 1. Resolve Name
-    search_term = HANDLE_MAP.get(handle, handle) # Default to handle if not in map
+    search_term = HANDLE_MAP.get(handle, handle)
     
-    # 2. Broad Search Query (The Fix)
-    # We remove 'site:twitter.com' and search for the *person* + keywords
-    query = f'"{search_term}" stock market "buy" OR "sell" OR "picks"'
+    # 2. Refined Search Query
+    # Some search results strip the '$', so we search for stock-specific keywords
+    query = f'"{search_term}" (stock OR shares OR bought OR sold OR calls OR options)'
     
-    print(f"🕵️‍♂️ Scouting Web for: {search_term}...")
+    print(f"🕵️‍♂️ AI Scouting Web for: {search_term}...")
     
     url = "https://api.search.brave.com/res/v1/web/search"
     headers = {"X-Subscription-Token": api_key}
     params = {
         "q": query,
-        "count": 20,       # Scan more results (20 instead of 10)
-        "freshness": "pw"  # Past Week only
+        "count": 15,
+        "freshness": "pw"
     }
 
     try:
@@ -44,7 +45,6 @@ def fetch_tickers_from_social(handle: str):
         data = response.json()
         results = data.get("web", {}).get("results", [])
         
-        # Combine titles and descriptions
         full_text = " ".join([r['title'] + " " + r['description'] for r in results])
         print(f"📝 Scanned {len(results)} search results.")
         
@@ -52,34 +52,37 @@ def fetch_tickers_from_social(handle: str):
         print(f"Brave Search Error: {e}")
         return []
 
-    # 3. Extract Candidates (Refined Regex)
-    # Matches $ABCD or just ABCD (2-5 capital letters)
-    # We deliberately cast a wide net.
-    candidates = re.findall(r'\b[A-Z]{2,5}\b', full_text)
+    # 3. Fast Extraction 
+    print(f"🧠 Scanning for Tickers in {len(results)} articles...")
     
-    # 4. Filter Noise
+    # Extract 2-5 letter fully capitalized words
+    raw_candidates = re.findall(r'\b[A-Z]{2,5}\b', full_text)
+    
+    # Filter out common noise
     ignore_list = {
         "THE", "FOR", "AND", "WHO", "ARE", "YOU", "WHY", "NOT", "NEW", "CEO", "CFO", 
         "NOW", "BUY", "SELL", "LOW", "HIGH", "ATH", "ETF", "USA", "USD", "YTD", 
-        "CNBC", "NEWS", "REAL", "TIME", "TODAY", "LIVE", "DATA", "KRUZ"
+        "CNBC", "NEWS", "REAL", "TIME", "TODAY", "LIVE", "DATA", "KRUZ", "WSJ", "NYSE",
+        "SEC", "FED", "CPI", "FOMC"
     }
-    unique_candidates = set([c for c in candidates if c not in ignore_list])
     
+    # Remove duplicates and noise
+    unique_tickers = list(dict.fromkeys([c for c in raw_candidates if c not in ignore_list]))
+    
+    # 4. Validate with yFinance
     valid_tickers = []
+    print(f"🔎 Validating {len(unique_tickers)} candidates...")
     
-    # 5. Validate with yFinance
-    print(f"🔎 Validating {len(unique_candidates)} candidates...")
-    
-    for ticker in unique_candidates:
-        if len(valid_tickers) >= 5: break # Limit to top 5
+    for ticker in unique_tickers:
+        if len(valid_tickers) >= 5: 
+            break # Limit to top 5
         
         try:
-            # We check if it has a price. If it errors, it's not a stock.
             stock = yf.Ticker(ticker)
-            # Fast check: 'info' is slow, 'fast_info' or history is faster
             price = stock.fast_info.last_price 
             if price and price > 0:
                 valid_tickers.append(ticker)
         except:
             continue
+            
     return valid_tickers
