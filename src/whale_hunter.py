@@ -16,7 +16,7 @@ import signal
 import time
 from langgraph.graph import StateGraph, END
 
-from src.llm import get_llm
+from src.llm import get_llm, invoke_with_fallback
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -169,7 +169,6 @@ def analyst_node(state):
     ticker = state["ticker"]
     info = state.get("financial_data", {})
     region = state.get("region", "USA")
-    llm = get_llm()
 
     logger.info("Analysing %s...", ticker)
 
@@ -238,7 +237,7 @@ def analyst_node(state):
     """
 
     try:
-        verdict = llm.invoke(prompt).content
+        verdict = invoke_with_fallback(prompt)
         record_paper_trade(ticker, price, verdict, source="Morning Cron")
     except Exception as exc:
         logger.error("LLM analysis failed for %s: %s", ticker, exc)

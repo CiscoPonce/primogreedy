@@ -12,7 +12,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from langgraph.graph import StateGraph, END
 
-from src.llm import get_llm
+from src.llm import get_llm, invoke_with_fallback
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -69,7 +69,6 @@ def generate_chart(ticker: str) -> bytes | None:
 def chat_node(state):
     """Dedicated UI chat node for conversational queries."""
     user_query = state.get("ticker", "")
-    llm = get_llm()
 
     prompt = f"""
     You are the Senior Broker AI for PrimoGreedy. Your team member just asked you this question:
@@ -79,7 +78,7 @@ def chat_node(state):
     """
 
     try:
-        response = llm.invoke(prompt).content
+        response = invoke_with_fallback(prompt)
     except Exception as exc:
         logger.error("Chat LLM error: %s", exc)
         response = "I am experiencing issues right now. Please try again."
@@ -229,7 +228,6 @@ def analyst_node(state):
     info = state.get("financial_data", {})
     chart_bytes = state.get("chart_data")
     region = state.get("region", "USA")
-    llm = get_llm()
 
     if state.get("status") == "FAIL":
         reason = state.get("final_report", info.get("reason", "Failed basic criteria."))
@@ -303,7 +301,7 @@ def analyst_node(state):
     """
 
     try:
-        verdict = llm.invoke(prompt).content
+        verdict = invoke_with_fallback(prompt)
         record_paper_trade(ticker, price, verdict, source="Chainlit UI")
     except Exception as exc:
         logger.error("LLM analysis failed for %s: %s", ticker, exc)
