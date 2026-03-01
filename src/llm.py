@@ -35,7 +35,7 @@ def get_llm():
 
     # 3. Connect to the LLM
     llm = ChatOpenAI(
-        model="meta-llama/llama-3.1-8b-instruct:free", 
+        model="google/gemma-3-27b-it:free", 
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0
