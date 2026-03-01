@@ -36,18 +36,22 @@ def generate_chart(ticker: str) -> bytes:
         return None
 
 # --- INLINE SEARCH TOOL ---
-def brave_market_search(query: str) -> str:
+def brave_market_search(query: str, count: int = 5, freshness: str = "") -> str:
     """Uses the Brave Search API to find financial news."""
     api_key = os.getenv("BRAVE_API_KEY")
     if not api_key:
         return "No Brave API key found."
         
     headers = {"Accept": "application/json", "X-Subscription-Token": api_key}
+    params = {"q": query, "count": count}
+    if freshness:
+        params["freshness"] = freshness
+        
     try:
-        response = requests.get(f"https://api.search.brave.com/res/v1/web/search?q={query}", headers=headers)
+        response = requests.get("https://api.search.brave.com/res/v1/web/search", headers=headers, params=params)
         if response.status_code == 200:
             results = response.json().get("web", {}).get("results", [])
-            return "\n".join([f"- {r.get('title')}: {r.get('description')}" for r in results[:5]])
+            return "\n".join([f"- {r.get('title')}: {r.get('description')}" for r in results])
         return "Search failed."
     except Exception as e:
         return f"Search error: {str(e)}"

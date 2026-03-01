@@ -16,12 +16,15 @@ from src.portfolio_tracker import record_paper_trade
 from src.email_utils import send_email_report
 from src.agent import brave_market_search
 
+import json
+
 # --- 1. CONFIGURATION ---
 MAX_MARKET_CAP = 300_000_000   # Max: $300 Million
 MIN_MARKET_CAP = 10_000_000    # Min: $10 Million
 MAX_PRICE_PER_SHARE = 30.00    # NEW: Must be under $30
-MAX_RETRIES = 1                # 1 Retry per region (Total 2 attempts)
+MAX_RETRIES = 3                # 3 Retries per region (Total 4 attempts)
 HARD_TIMEOUT_SECONDS = 3000    # 50 minutes to match GitHub Actions
+SEEN_TICKERS_FILE = "src/seen_tickers.json"
 
 # 🌍 EXCHANGE SUFFIX MAP
 REGION_SUFFIXES = {
@@ -35,10 +38,33 @@ REGION_SUFFIXES = {
 def _timeout_handler(signum, frame):
     raise TimeoutError("⏰ Hard timeout reached (50 minutes). Aborting.")
 
-# --- 2. THE MEMORY ---
+# --- MEMORY HANDLERS ---
+def load_seen_tickers() -> dict:
+    if not os.path.exists(SEEN_TICKERS_FILE):
+        return {}
+    try:
+        with open(SEEN_TICKERS_FILE, "r") as f:
+            data = json.load(f)
+            # Basic cleanup: Remove items older than 7 days (7*24*60*60 = 604800s)
+            now = time.time()
+            clean_data = {k: v for k, v in data.items() if now - v < 604800}
+            return clean_data
+    except:
+        return {}
+
+def mark_ticker_seen(ticker: str):
+    data = load_seen_tickers()
+    data[ticker] = time.time()
+    try:
+        with open(SEEN_TICKERS_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Memory Save Error: {e}")
+
 class AgentState(TypedDict):
     region: str
-    ticker: str
+    ticker: str            # The single ticker actively being evaluated by the Gatekeeper
+    candidates: list       # A list of backup tickers from the LLM extraction
     company_name: str
     market_cap: float
     is_small_cap: bool
@@ -49,13 +75,18 @@ class AgentState(TypedDict):
 llm = get_llm()
 
 # --- HELPER FUNCTIONS ---
-def extract_ticker_from_text(text: str) -> str:
-    cleaned = text.strip().upper()
-    if re.fullmatch(r'[A-Z]{1,5}(\.[A-Z]{1,2})?', cleaned): return cleaned
-    candidates = re.findall(r'\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?)\b', cleaned)
+def extract_tickers_from_text(text: str) -> list:
+    """Extracts a comma-separated list of tickers from LLM output."""
+    raw_tickers = [t.strip().upper() for t in text.split(',')]
+    valid_tickers = []
     noise_words = {"THE", "AND", "FOR", "ARE", "NOT", "YOU", "ALL", "CAN", "ONE", "OUT", "HAS", "NEW", "NOW", "SEE", "WHO", "GET", "SHE", "TOO", "USE", "NONE", "THIS", "THAT", "WITH", "HAVE", "FROM", "THEY", "BEEN", "SAID", "MAKE", "LIKE", "JUST", "OVER", "SUCH", "TAKE", "YEAR", "SOME", "MOST", "VERY", "WHEN", "WHAT", "YOUR", "ALSO", "INTO", "ROLE", "TASK", "INPUT", "STOCK", "TICKER", "CAP", "MICRO", "NANO"}
-    candidates = [c for c in candidates if c not in noise_words and len(c) >= 2]
-    return candidates[0] if candidates else "NONE"
+    
+    for t in raw_tickers:
+        cleaned = re.sub(r'[^A-Z\.]', '', t)
+        if len(cleaned) >= 2 and cleaned not in noise_words and cleaned not in valid_tickers:
+            valid_tickers.append(cleaned)
+            
+    return valid_tickers
 
 def resolve_ticker_suffix(raw_ticker: str, region: str) -> str:
     if "." in raw_ticker: return raw_ticker
@@ -77,7 +108,23 @@ def resolve_ticker_suffix(raw_ticker: str, region: str) -> str:
 def scout_node(state):
     region = state.get('region', 'USA')
     retries = state.get('retry_count', 0)
+    candidates_in_memory = state.get('candidates', [])
+    seen_tickers = load_seen_tickers()
     
+    # NEW LOGIC: If we already have candidates in memory from the LLM, pop the next one and test it!
+    # No need to hit Brave Search or the LLM again until this list is empty.
+    while candidates_in_memory:
+        next_ticker = candidates_in_memory.pop(0)
+        next_ticker = resolve_ticker_suffix(next_ticker, region)
+        
+        if next_ticker not in seen_tickers:
+            print(f"   🎯 Popping next candidate from LLM memory: {next_ticker} ({len(candidates_in_memory)} left)")
+            mark_ticker_seen(next_ticker)
+            return {"ticker": next_ticker, "candidates": candidates_in_memory}
+        else:
+            print(f"   ⏭️ Skipping backup {next_ticker} (Seen recently)")
+    
+    # If we are here, our candidate list is empty and we need to fetch new ones.
     if retries > 0:
         print(f"   🔄 Retry pause (2s)...")
         time.sleep(2)
@@ -93,28 +140,41 @@ def scout_node(state):
     ]
     
     try:
-        search_results = brave_market_search(random.choice(base_queries))
+        search_results = brave_market_search(random.choice(base_queries), count=15, freshness="pw")
     except Exception as e:
         print(f"   ❌ Search Error: {e}")
-        return {"ticker": "NONE"}
+        return {"ticker": "NONE", "candidates": []}
 
     extraction_prompt = f"""
     ROLE: Financial Data Extractor.
     INPUT: {search_results}
-    TASK: Extract the single most interesting MICRO-CAP stock ticker.
-    CONSTRAINT: Must be listed in {region}. Ignore companies larger than $300M.
-    OUTPUT: Just the ticker symbol. Nothing else.
+    TASK: Find ANY stock tickers mentioned in the text. You can return up to 10 candidates. 
+    CONSTRAINT: Must be listed in {region}. Ignore companies larger than $300M. If unsure, guess the ticker.
+    OUTPUT FORMAT: ONLY a comma-separated list of ticker symbols (e.g. AAPL, TSLA, PLTR). No other text.
     """
     
     try:
         if llm:
             raw = llm.invoke(extraction_prompt).content.strip()
-            ticker = extract_ticker_from_text(raw)
-            print(f"   🎯 Target: {ticker}")
-            if ticker != "NONE": ticker = resolve_ticker_suffix(ticker, region)
-            return {"ticker": ticker}
-        else: return {"ticker": "NONE"}
-    except: return {"ticker": "NONE"}
+            fresh_candidates = extract_tickers_from_text(raw)
+            print(f"   🤖 Found {len(fresh_candidates)} new candidates: {fresh_candidates}")
+            
+            # Immediately pull the first valid one
+            while fresh_candidates:
+                first_ticker = fresh_candidates.pop(0)
+                first_ticker = resolve_ticker_suffix(first_ticker, region)
+                
+                if first_ticker not in seen_tickers:
+                    print(f"   🎯 Target Acquired: {first_ticker}")
+                    mark_ticker_seen(first_ticker)
+                    return {"ticker": first_ticker, "candidates": fresh_candidates}
+                else:
+                    print(f"   ⏭️ Skipping {first_ticker} (Seen recently)")
+            
+            print("   🚫 All new candidates were already seen.")
+            return {"ticker": "NONE", "candidates": []}
+        else: return {"ticker": "NONE", "candidates": []}
+    except: return {"ticker": "NONE", "candidates": []}
 
 def gatekeeper_node(state):
     ticker = state['ticker']
