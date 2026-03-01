@@ -3,6 +3,8 @@
 CLAUDE.md
 AGENTS.md
 .claude/
+primo_env/
+test_env/
 .mcp.json
 .DS_Store
 

@@ -54,3 +54,4 @@ langgraph
 resend
 yfinance
 matplotlib
+backtrader

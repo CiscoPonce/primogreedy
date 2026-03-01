@@ -40,6 +40,7 @@ jobs:
           EMAIL_DAVID: ${{ secrets.EMAIL_DAVID }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         run: PYTHONPATH=. python src/whale_hunter.py
 
       # 🚨 CRITICAL NEW STEP: Save the memory file safely without crashing

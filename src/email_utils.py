@@ -1,39 +1,37 @@
+import threading
 import resend
+from src.core.logger import get_logger
 
-def send_email_report(subject, html_content, recipient, api_key):
+logger = get_logger(__name__)
+
+_send_lock = threading.Lock()
+
+
+def send_email_report(subject: str, html_content: str, recipient: str, api_key: str):
+    """Send an HTML email via Resend.
+
+    Uses a lock around ``resend.api_key`` assignment to prevent race
+    conditions when multiple emails are dispatched concurrently.
     """
-    A 'Dumb' Sender. 
-    It takes instructions from niche_hunter.py and executes them.
-    
-    Args:
-        subject (str): The email subject.
-        html_content (str): The full HTML report.
-        recipient (str): Who to send it to.
-        api_key (str): The specific Resend Key to use.
-    """
-    
     if not api_key:
-        print(f"❌ Error: No API Key provided for {recipient}. Email skipped.")
-        return
-
-    try:
-        # 1. Set the specific key for this user
-        resend.api_key = api_key
-
-        # 2. Build the email package
-        params = {
-            "from": "PrimoGreedy <onboarding@resend.dev>",
-            "to": [recipient],
-            "subject": subject,
-            "html": html_content
-        }
-
-        # 3. Send it
-        r = resend.Emails.send(params)
-        print(f"✅ Email successfully sent to {recipient} (ID: {r.get('id')})")
-        return r
-
-    except Exception as e:
-        print(f"❌ Failed to send to {recipient}: {str(e)}")
-        # We don't raise the error so the loop keeps going for other users
+        logger.warning("No API key for %s – email skipped", recipient)
         return None
+
+    with _send_lock:
+        try:
+            resend.api_key = api_key
+
+            params = {
+                "from": "PrimoGreedy <onboarding@resend.dev>",
+                "to": [recipient],
+                "subject": subject,
+                "html": html_content,
+            }
+
+            result = resend.Emails.send(params)
+            logger.info("Email sent to %s (ID: %s)", recipient, result.get("id"))
+            return result
+
+        except Exception as exc:
+            logger.error("Failed to send email to %s: %s", recipient, exc)
+            return None

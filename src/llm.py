@@ -1,45 +1,36 @@
-#model="z-ai/glm-4.5-air:free",
-#"google/gemini-2.0-flash-lite-preview-02-05:free"
-#model="upstage/solar-pro-3:free", 
-
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-# Load .env locally (This line does nothing on the cloud if .env is missing, which is fine)
 load_dotenv()
 
-def get_llm():
-    """
-    The Brain.
-    Connects to OpenRouter.
-    """
-    # 1. Try to get the key
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    
-    # 2. Debugging Block (This prints to Hugging Face Logs)
-    if not api_key:
-        print("⚠️ CRITICAL ERROR: API Key is missing!")
-        print("---------------------------------------------------")
-        print("I looked for: 'OPENROUTER_API_KEY'")
-        print("But I only found these keys in the environment:")
-        # Print only the NAMES of the keys (safe), not the values
-        for key in os.environ.keys():
-            if "API" in key or "KEY" in key:
-                print(f" - {key}")
-        print("---------------------------------------------------")
-        raise ValueError("❌ OPENROUTER_API_KEY not found. Please check your Hugging Face Secrets.")
-    else:
-        # If it works, print a masked version to confirm
-        print(f"✅ API Key loaded successfully! (Starts with: {api_key[:8]}...)")
+_llm_instance = None
 
-    # 3. Connect to the LLM
-    llm = ChatOpenAI(
-        model="google/gemma-3-27b-it:free", 
+
+def get_llm() -> ChatOpenAI:
+    """Lazy-initialised LLM singleton.
+
+    The connection is created on first call, not at import time, so
+    modules can be imported without triggering API-key validation.
+    """
+    global _llm_instance
+    if _llm_instance is not None:
+        return _llm_instance
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+
+    if not api_key:
+        from src.core.logger import get_logger
+        logger = get_logger(__name__)
+        logger.error("OPENROUTER_API_KEY not found in environment")
+        available = [k for k in os.environ if "API" in k or "KEY" in k]
+        logger.error("Available key-like env vars: %s", available)
+        raise ValueError("OPENROUTER_API_KEY not found. Check your secrets.")
+
+    _llm_instance = ChatOpenAI(
+        model="google/gemma-3-27b-it:free",
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
-        temperature=0
+        temperature=0,
     )
-    
-    return llm
-
+    return _llm_instance
