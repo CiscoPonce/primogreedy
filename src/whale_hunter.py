@@ -132,10 +132,15 @@ def gatekeeper_node(state):
         mkt_cap = info.get('marketCap', 0)
         price = info.get('currentPrice', 0) or info.get('regularMarketPrice', 0)
         name = info.get('shortName', ticker)
+        currency = info.get('currency', 'USD')
+        
+        # 🟢 FIX: Normalize UK Pence to Pounds BEFORE Price Check
+        if ticker.endswith(".L") or currency in ["GBp", "GBX"]:
+            price = price / 100
         
         # 1. Price Check
         if price > MAX_PRICE_PER_SHARE:
-             print(f"   🚫 {ticker} Rejected — Price ${price} > ${MAX_PRICE_PER_SHARE}.")
+             print(f"   🚫 {ticker} Rejected — Price ${price:.2f} > ${MAX_PRICE_PER_SHARE}.")
              return {"is_small_cap": False, "retry_count": retries + 1}
 
         # 2. Market Cap Check

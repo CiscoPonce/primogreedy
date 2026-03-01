@@ -201,7 +201,8 @@ def gatekeeper_node(state):
             'ebitda': raw_info.get('ebitda', 0),
             'sector': raw_info.get('sector', 'Unknown'),
             'freeCashflow': raw_info.get('freeCashflow', 0),
-            'totalCash': raw_info.get('totalCash', 0)
+            'totalCash': raw_info.get('totalCash', 0),
+            'currency': raw_info.get('currency', 'USD')
         }
         del raw_info 
         gc.collect() 
@@ -210,6 +211,12 @@ def gatekeeper_node(state):
         mkt_cap = lean_info['marketCap']
         fcf = lean_info['freeCashflow']
         cash = lean_info['totalCash']
+        currency = lean_info['currency']
+        
+        # 🟢 FIX: Normalize UK Pence to Pounds BEFORE Price Check
+        if ticker.endswith(".L") or currency in ["GBp", "GBX"]:
+            price = price / 100
+            lean_info['currentPrice'] = price
         
         # 🚨 FIX: Generate the chart before returning so it is always included
         chart_bytes = generate_chart(ticker)
