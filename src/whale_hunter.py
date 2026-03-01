@@ -131,16 +131,25 @@ def scout_node(state):
 
     print(f"\n🔭 [Attempt {retries+1}/{MAX_RETRIES+1}] Scouting {region} Micro-Caps...")
     
+    # Inject specific exchange acronyms to force higher ticker density
+    exchange_map = {
+        "USA": "NASDAQ OTC",
+        "UK": "LSE AIM",
+        "Canada": "TSX TSX-V",
+        "Australia": "ASX"
+    }
+    local_exchange = exchange_map.get(region, region)
+
     base_queries = [
-        f"best value stocks {region} under $30 per share",
-        f"undervalued stocks {region} price below 30 dollars",
-        f"hidden gem microcap stocks {region} with low float",
-        f"benjamin graham net net stocks {region} cheap share price",
-        f"insider buying microcap stocks {region} this week"
+        f"top microcap stock picks {local_exchange} 2024",
+        f"undervalued small cap stocks {local_exchange} analysis buy",
+        f"hidden gem penny stocks {local_exchange} explosive growth",
+        f"insider buying microcap {local_exchange} this week",
+        f"best {local_exchange} stocks to buy now under 30 dollars"
     ]
     
     try:
-        search_results = brave_market_search(random.choice(base_queries), count=15, freshness="pw")
+        search_results = brave_market_search(random.choice(base_queries), count=15, freshness="pm")
     except Exception as e:
         print(f"   ❌ Search Error: {e}")
         return {"ticker": "NONE", "candidates": []}
