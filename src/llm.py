@@ -33,9 +33,8 @@ def get_llm():
         print(f"✅ API Key loaded successfully! (Starts with: {api_key[:8]}...)")
 
     # 3. Connect to the LLM
-    # NOTE: upstage/solar-pro-3:free is active until March 23rd
     llm = ChatOpenAI(
-        model="upstage/solar-pro-3:free", 
+        model="meta-llama/llama-3.1-8b-instruct:free", 
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0
