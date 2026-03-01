@@ -1,5 +1,6 @@
 #model="z-ai/glm-4.5-air:free",
 #"google/gemini-2.0-flash-lite-preview-02-05:free"
+#model="upstage/solar-pro-3:free", 
 
 import os
 from dotenv import load_dotenv
