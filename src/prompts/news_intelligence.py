@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Dict, Any
-from langchain.prompts import ChatPromptTemplate
-from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 
 
 def get_news_analysis_template() -> ChatPromptTemplate:
@@ -125,26 +125,36 @@ Enhanced Summary:"""
     return ChatPromptTemplate.from_template(template)
 
 
-def get_news_response_schemas() -> List[ResponseSchema]:
+def get_news_response_schemas() -> List[Dict[str, str]]:
     """
     Define response schemas for structured output parsing of news analysis.
     Simple validation schemas - detailed descriptions are in the prompt template.
     """
     return [
-        ResponseSchema(name="news_relevance", description="Integer from -2 to 2"),
-        ResponseSchema(name="sentiment", description="Integer from -2 to 2"), 
-        ResponseSchema(name="price_impact_potential", description="Integer from -2 to 2"),
-        ResponseSchema(name="trend_direction", description="Integer from -2 to 2"),
-        ResponseSchema(name="earnings_impact", description="Integer from -2 to 2"),
-        ResponseSchema(name="investor_confidence", description="Integer from -2 to 2"),
-        ResponseSchema(name="risk_profile_change", description="Integer from -2 to 2")
+        {"name": "news_relevance", "description": "Integer from -2 to 2"},
+        {"name": "sentiment", "description": "Integer from -2 to 2"},
+        {"name": "price_impact_potential", "description": "Integer from -2 to 2"},
+        {"name": "trend_direction", "description": "Integer from -2 to 2"},
+        {"name": "earnings_impact", "description": "Integer from -2 to 2"},
+        {"name": "investor_confidence", "description": "Integer from -2 to 2"},
+        {"name": "risk_profile_change", "description": "Integer from -2 to 2"},
     ]
 
 
-def get_news_output_parser() -> StructuredOutputParser:
+def get_news_output_parser() -> JsonOutputParser:
     """Create structured output parser for news analysis results."""
-    response_schemas = get_news_response_schemas()
-    return StructuredOutputParser.from_response_schemas(response_schemas)
+    from pydantic import BaseModel, Field
+
+    class NewsAnalysis(BaseModel):
+        news_relevance: int = Field(description="Integer from -2 to 2")
+        sentiment: int = Field(description="Integer from -2 to 2")
+        price_impact_potential: int = Field(description="Integer from -2 to 2")
+        trend_direction: int = Field(description="Integer from -2 to 2")
+        earnings_impact: int = Field(description="Integer from -2 to 2")
+        investor_confidence: int = Field(description="Integer from -2 to 2")
+        risk_profile_change: int = Field(description="Integer from -2 to 2")
+
+    return JsonOutputParser(pydantic_object=NewsAnalysis)
 
 
 def format_news_data(news_items: List[Dict[str, Any]]) -> str:

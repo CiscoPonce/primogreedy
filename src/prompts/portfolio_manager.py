@@ -1,5 +1,5 @@
-from langchain.prompts import ChatPromptTemplate
-from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 from typing import Dict, Any, List
 
 
@@ -150,22 +150,14 @@ def get_structured_output_parser():
     """
     Creates a structured output parser for portfolio manager decisions.
     """
-    response_schemas = [
-        ResponseSchema(
-            name="trading_signal",
-            description="The recommended trading action: BUY, SELL, or HOLD"
-        ),
-        ResponseSchema(
-            name="confidence_level",
-            description="Confidence level in the decision (0.1-1.0)"
-        ),
-        ResponseSchema(
-            name="position_size",
-            description="Recommended position size as percentage (10-100)"
-        )
-    ]
-    
-    return StructuredOutputParser.from_response_schemas(response_schemas)
+    from pydantic import BaseModel, Field
+
+    class TradingDecision(BaseModel):
+        trading_signal: str = Field(description="The recommended trading action: BUY, SELL, or HOLD")
+        confidence_level: float = Field(description="Confidence level in the decision (0.1-1.0)")
+        position_size: int = Field(description="Recommended position size as percentage (10-100)")
+
+    return JsonOutputParser(pydantic_object=TradingDecision)
 
 
 def format_basic_financials(financials_data: Dict[str, Any]) -> str:

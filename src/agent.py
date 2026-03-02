@@ -26,6 +26,7 @@ from src.core.search import brave_search
 from src.core.ticker_utils import extract_tickers, resolve_ticker_suffix, normalize_price
 from src.core.memory import load_seen_tickers, mark_ticker_seen
 from src.core.state import AgentState
+from src.prompts.senior_broker import get_analyst_prompt
 
 from src.discovery.screener import screen_microcaps, get_trending_tickers_from_brave
 from src.discovery.scoring import rank_candidates
@@ -78,7 +79,7 @@ def chat_node(state):
     """
 
     try:
-        response = invoke_with_fallback(prompt)
+        response = invoke_with_fallback(prompt, run_name="chat_node")
     except Exception as exc:
         logger.error("Chat LLM error: %s", exc)
         response = "I am experiencing issues right now. Please try again."
@@ -255,13 +256,8 @@ def analyst_node(state):
 
     news = brave_search(f"{ticker} stock {sector} catalysts insider buying")
 
-    prompt = f"""
-    Act as a Senior Financial Broker evaluating {state.get('company_name')} ({ticker}).
-    
-    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {ebitda}
-    QUANTITATIVE THESIS: {thesis}
-    """
-
+    # --- Build deep-fundamentals context ---
+    deep_fundamentals = ""
     if region == "USA" and "." not in ticker:
         logger.info("Researching Finnhub for %s...", ticker)
         context = ""
@@ -275,33 +271,27 @@ def analyst_node(state):
         insider = get_insider_buys(ticker)
         context += f"\nInsider Sentiment (6mo): {insider['sentiment']} | MSPR: {insider['mspr']} | Net Shares: {insider['change']}\n"
 
-        prompt += f"\nDEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}\n"
+        deep_fundamentals = f"DEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}"
     else:
-        prompt += f"\nNEWS: {str(news)[:1500]}\n"
+        deep_fundamentals = f"NEWS: {str(news)[:1500]}"
 
-    prompt += f"""
-    Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis and recent insider behavior/news. Do not use fluff or buzzwords.
-    
-    Format your response EXACTLY like this:
-    
-    ### THE QUANTITATIVE BASE (Graham / Asset Play)
-    * State the current Price vs the calculated {strategy} valuation.
-    * Briefly explain if the math supports a margin of safety.
-    
-    ### THE LYNCH PITCH (Why I would own this)
-    * **The Core Action:** In one sentence, what are insiders doing (buying/selling/neutral)? 
-    * **The Catalyst:** Based on the news, what is the ONE simple reason this stock could run?
-    
-    ### THE MUNGER INVERT (How I could lose money)
-    * **Structural Weakness:** What is the most likely way an investor loses money here based on fundamentals/news?
-    * **The Bear Evidence:** What exact metric, news, or math would prove the bear case right?
-    
-    ### FINAL VERDICT
-    STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
-    """
+    # --- Build prompt from Hub (or local fallback) ---
+    template = get_analyst_prompt()
+    prompt = template.format(
+        company_name=state.get("company_name", ticker),
+        ticker=ticker,
+        price=price,
+        eps=eps,
+        book_value=book_value,
+        ebitda=ebitda,
+        thesis=thesis,
+        strategy=strategy,
+        deep_fundamentals=deep_fundamentals,
+        sec_context="",  # Placeholder — SEC EDGAR data added in Epic 3
+    )
 
     try:
-        verdict = invoke_with_fallback(prompt)
+        verdict = invoke_with_fallback(prompt, run_name="analyst_node")
         record_paper_trade(ticker, price, verdict, source="Chainlit UI")
     except Exception as exc:
         logger.error("LLM analysis failed for %s: %s", ticker, exc)

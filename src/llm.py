@@ -2,6 +2,7 @@ import os
 import time
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from langchain_core.runnables import RunnableConfig
 
 load_dotenv()
 
@@ -47,11 +48,14 @@ def get_llm() -> ChatOpenAI:
     return _llm_instance
 
 
-def invoke_with_fallback(prompt: str, max_retries: int = 2) -> str:
+def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm_call") -> str:
     """Invoke the LLM with automatic model fallback on 429 rate limits.
 
     Tries each model in MODEL_CHAIN until one succeeds.  Returns the
     response content string.
+
+    Each invocation is tagged with the model name so LangSmith can filter
+    by ``model:<name>`` and ``error:429`` for the error dashboard.
     """
     from src.core.logger import get_logger
     logger = get_logger(__name__)
@@ -59,6 +63,8 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY not found.")
+
+    last_error = None
 
     for model_id in MODEL_CHAIN:
         for attempt in range(max_retries):
@@ -69,10 +75,23 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2) -> str:
                     base_url="https://openrouter.ai/api/v1",
                     temperature=0,
                 )
-                response = llm.invoke(prompt)
+
+                # LangSmith: tag every call with model name + attempt number
+                config = RunnableConfig(
+                    run_name=run_name,
+                    tags=[f"model:{model_id}", f"attempt:{attempt + 1}"],
+                    metadata={
+                        "model_id": model_id,
+                        "attempt": attempt + 1,
+                        "fallback_position": MODEL_CHAIN.index(model_id),
+                    },
+                )
+
+                response = llm.invoke(prompt, config=config)
                 logger.info("LLM response from %s (attempt %d)", model_id, attempt + 1)
                 return response.content
             except Exception as exc:
+                last_error = exc
                 err_str = str(exc)
                 if "429" in err_str:
                     logger.warning("Rate-limited on %s (attempt %d), trying next...", model_id, attempt + 1)
@@ -88,4 +107,4 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2) -> str:
                     else:
                         break
 
-    raise RuntimeError(f"All {len(MODEL_CHAIN)} models failed. Last tried: {MODEL_CHAIN[-1]}")
+    raise RuntimeError(f"All {len(MODEL_CHAIN)} models failed. Last tried: {MODEL_CHAIN[-1]}. Last error: {last_error}")
