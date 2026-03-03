@@ -64,10 +64,8 @@ def check_financial_health(ticker: str, info: dict) -> dict:
         config = SECTOR_CONFIG.get(sector, SECTOR_CONFIG["Default"])
 
         current_price = info.get("currentPrice", 0) or info.get("regularMarketPrice", 0) or 0
-        currency = info.get("currency", "USD")
-
-        if ticker.endswith(".L") or currency in ("GBp", "GBX"):
-            current_price = current_price / 100
+        # NOTE: Pence→Pounds conversion is handled upstream by normalize_price()
+        # in agent.py before lean_info is passed here. Do NOT divide by 100 again.
 
         # 1. Financial Services (Banks)
         if config["type"] == "bank":

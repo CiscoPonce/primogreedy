@@ -244,6 +244,14 @@ def analyst_node(state):
     book_value = info.get("bookValue", 0) or 0
     ebitda = info.get("ebitda", 0) or 0
     sector = info.get("sector", "Unknown")
+    currency = info.get("currency", "USD")
+
+    # Normalize per-share metrics from pence → pounds for UK stocks
+    # (price is already converted by gatekeeper's normalize_price call,
+    #  but eps/bookValue come raw from yFinance in GBp/GBX)
+    if ticker.endswith(".L") or currency in ("GBp", "GBX"):
+        eps = eps / 100
+        book_value = book_value / 100
 
     if eps > 0 and book_value > 0:
         strategy = "GRAHAM VALUE"
