@@ -32,7 +32,7 @@ START --> initial_routing --> [chat] --> END
    - Share Price: under $30.00
    - Zombie Filter: rejects unprofitable companies with < 6 months cash runway
    - Routes directly to `analyst` (PASS / retries exhausted) or back to `scout` (FAIL) via `Command`.
-3. **Analyst Node** — Senior Broker analysis powered by OpenRouter (5-model fallback chain). Calls Finnhub tools for deep fundamentals and insider sentiment. Returns structured `InvestmentVerdict` (Pydantic model) with guaranteed `STRONG BUY | BUY | WATCH | AVOID` verdicts, falling back to plain LLM output.
+3. **Analyst Node** — Senior Broker analysis powered by OpenRouter (5-model fallback chain). Calls Finnhub tools for deep fundamentals and insider sentiment. Fetches **SEC EDGAR** 10-K/10-Q filings for US equities (MD&A + Risk Factors ground truth). Returns structured `InvestmentVerdict` (Pydantic model) with guaranteed `STRONG BUY | BUY | WATCH | AVOID` verdicts plus **Kelly Criterion position sizing**, falling back to plain LLM output.
 
 ### Workflow Pipeline (`src/workflows/workflow.py`)
 
@@ -69,6 +69,7 @@ Each `hunt_region` invokes the full per-region subgraph (scout -> gatekeeper -> 
 | `RetryPolicy` | All nodes | `max_attempts=3, initial_interval=2.0` for transient errors |
 | `recursion_limit` | All `invoke()` calls | Set to 30 to prevent infinite loops |
 | Structured output | Analyst nodes | `with_structured_output(InvestmentVerdict)` for validated verdicts |
+| `@tool` decorator | `sec_edgar.py`, `finance_tools.py` | LangChain tool pattern for API integrations |
 | `START` / `END` | All graphs | Modern entry-point API (no deprecated `set_entry_point`) |
 
 ---
@@ -89,10 +90,17 @@ Headless agent running as a **GitHub Action** daily cron. Hunts all 4 regions in
 ### VPS Data Layer (`vps/`)
 Optional **FastAPI + DuckDB** backend deployed on a VPS (behind Tailscale) that replaces local JSON files for persistence:
 - `seen_tickers` — Prevents re-analysing the same ticker within 30 days
-- `paper_portfolio` — Records all BUY/STRONG BUY/WATCH paper trades
+- `paper_portfolio` — Records all BUY/STRONG BUY/WATCH paper trades with Kelly position sizing
 - `agent_runs` — Operational metrics for LangSmith correlation
 
 The agent (`src/core/memory.py`, `src/portfolio_tracker.py`) auto-detects the VPS via `VPS_API_URL` env var and falls back to local JSON files when unavailable.
+
+### SEC EDGAR Ground Truth (`src/sec_edgar.py`)
+Fetches the most recent 10-K or 10-Q filing from SEC EDGAR for US equities and extracts two investment-critical sections:
+- **Item 7: Management's Discussion & Analysis (MD&A)** — Management's own view of operations
+- **Item 1A: Risk Factors** — Legally mandated disclosure of what could go wrong
+
+Uses the EDGAR EFTS full-text search API with BeautifulSoup HTML parsing and `RecursiveCharacterTextSplitter` for section truncation. Injected into the analyst prompt as `{sec_context}` for non-US equities this is skipped gracefully.
 
 ### Structured Verdicts (`src/models/verdict.py`)
 Pydantic model enforcing one of 4 verdict types:
@@ -100,6 +108,19 @@ Pydantic model enforcing one of 4 verdict types:
 STRONG BUY | BUY | WATCH | AVOID
 ```
 Used via `llm.with_structured_output(InvestmentVerdict)` with a graceful fallback to plain text LLM output.
+
+### Kelly Criterion Position Sizing (`src/models/kelly.py`)
+Computes optimal position size from historical portfolio performance using the **Kelly Criterion**:
+- Calculates win rate, average win %, and average loss % from VPS or local trade history
+- Applies the Kelly formula: `f* = (win_rate / avg_loss) - ((1 - win_rate) / avg_win)`
+- Uses conservative **half-Kelly** with verdict-based scaling:
+  - `STRONG BUY` → 100% of half-Kelly
+  - `BUY` → 70% of half-Kelly
+  - `WATCH` → 30% of half-Kelly
+- Clamped to **1% -- 25%** to prevent over-concentration
+- Requires minimum 5 historical trades before activating (returns 0% otherwise)
+
+Position sizing is computed **post-LLM** and injected into the `InvestmentVerdict` model, appearing in both the report output and the paper trade record.
 
 ---
 
@@ -152,8 +173,9 @@ primogreedy/
 │   ├── agent.py                    # Interactive Chainlit pipeline (scout/gatekeeper/analyst)
 │   ├── whale_hunter.py             # Daily cron pipeline + parallel Send orchestrator
 │   ├── llm.py                      # OpenRouter LLM with 5-model fallback chain
+│   ├── sec_edgar.py                # SEC EDGAR 10-K/10-Q filing fetcher + parser (@tool)
 │   ├── finance_tools.py            # Finnhub tools (@tool decorated)
-│   ├── portfolio_tracker.py        # Paper trade recording + evaluation
+│   ├── portfolio_tracker.py        # Paper trade recording + evaluation (with position_size)
 │   ├── email_utils.py              # Resend email dispatch
 │   ├── core/
 │   │   ├── state.py                # AgentState (TypedDict with Annotated reducers)
@@ -162,7 +184,8 @@ primogreedy/
 │   │   ├── ticker_utils.py         # Ticker extraction, suffix resolution
 │   │   └── logger.py               # Logging config
 │   ├── models/
-│   │   └── verdict.py              # InvestmentVerdict Pydantic model
+│   │   ├── verdict.py              # InvestmentVerdict Pydantic model (with Kelly fields)
+│   │   └── kelly.py                # Kelly Criterion position sizing calculator
 │   ├── agents/                     # Workflow pipeline nodes
 │   │   ├── data_collection_agent.py
 │   │   ├── technical_analysis_agent.py
