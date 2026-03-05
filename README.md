@@ -8,67 +8,186 @@ pinned: false
 app_port: 7860
 ---
 
-# 🕵️‍♂️ PrimoGreedy Agent
+# PrimoGreedy Agent
 
 **PrimoGreedy** is an automated, AI-driven financial analysis agent designed to hunt, filter, and evaluate Micro-Cap and Small-Cap stocks. It acts as a ruthless "Logic Firewall," aggressively rejecting high-debt, cash-burning, and overvalued companies before deploying a ReAct (Reasoning and Acting) LLM to write highly structured fundamental investment memos.
 
 ---
 
-## 🏗️ Core Architecture (The LangGraph Engine)
+## Core Architecture (The LangGraph Engine)
 
-The system is built on **LangGraph**, routing potential stock candidates through a sequential, state-managed pipeline:
+The system is built on **LangGraph** following modern best practices (partial state updates, `Command` routing, `Send` parallel fan-out, checkpointing, and `RetryPolicy`).
 
-1. **Scout Node (`scout_node`):**
-   - Autonomously scours the web (via Brave Search, X/Twitter accounts, or direct user input) to find an interesting stock ticker.
-2. **Gatekeeper Node (`gatekeeper_node`):**
-   - The strict **Quantitative Firewall**. It instantly rejects companies failing baseline algorithmic tests:
-     - **Market Cap:** Must be between $10M and $300M.
-     - **Share Price:** Must be under $30.00.
-     - **The Zombie Filter:** Rejects any unprofitable company with less than 6 months of cash runway remaining.
-3. **Analyst Node (`analyst_node`):**
-   - A **ReAct Agent** (powered by OpenRouter LLMs like Solar Pro or Gemini). 
-   - Before writing its memo, it dynamically calls **Finnhub Tools** (`finance_tools.py`) to gather deep fundamentals (Beta, ROE), check insider buying/selling sentiment, and pull direct financial news.
-   - Outputs a highly structured memo answering three frameworks: **The Quantitative Base** (Graham), **The Lynch Pitch**, and **The Munger Invert**.
+### Hunter Pipeline (`src/agent.py` / `src/whale_hunter.py`)
+
+```
+START --> initial_routing --> [chat] --> END
+                          \-> [scout] --> [gatekeeper] --Command--> [analyst] --> END
+                                              \--Command--> [scout]  (retry)
+```
+
+1. **Scout Node** — Discovers candidates via yFinance screener + Brave Search trending, scores and ranks them, and pops the best unseen ticker.
+2. **Gatekeeper Node** — Strict quantitative firewall using the `Command` pattern for routing:
+   - Market Cap: $10M -- $300M
+   - Share Price: under $30.00
+   - Zombie Filter: rejects unprofitable companies with < 6 months cash runway
+   - Routes directly to `analyst` (PASS / retries exhausted) or back to `scout` (FAIL) via `Command`.
+3. **Analyst Node** — Senior Broker analysis powered by OpenRouter (5-model fallback chain). Calls Finnhub tools for deep fundamentals and insider sentiment. Returns structured `InvestmentVerdict` (Pydantic model) with guaranteed `STRONG BUY | BUY | WATCH | AVOID` verdicts, falling back to plain LLM output.
+
+### Workflow Pipeline (`src/workflows/workflow.py`)
+
+```
+START --> [data_collection] --> [technical_analysis] --> [news_intelligence] --> [portfolio_manager] --> END
+```
+
+A linear 4-node pipeline for deep single-ticker analysis (used by `main.py` CLI).
+
+### Parallel Region Orchestrator (`src/whale_hunter.py`)
+
+The daily cron dispatches all 4 markets (USA, UK, Canada, Australia) **in parallel** via the LangGraph `Send` API:
+
+```
+START --> dispatch_regions --> [hunt_region: USA]       \
+                          \-> [hunt_region: UK]         |-- region_results --> END
+                          \-> [hunt_region: Canada]     |
+                          \-> [hunt_region: Australia]  /
+```
+
+Each `hunt_region` invokes the full per-region subgraph (scout -> gatekeeper -> analyst -> email).
 
 ---
 
-## 🚀 Key Modules
+## LangGraph Features Used
 
-### 1. The Interactive UI (`app.py`)
-A Chainlit-powered chat interface where you can interact directly with the agent. 
-- **Command `AUTO`**: The agent scans the global market for trending tickers and evaluates them.
-- **Command `@Handle`**: The agent targets specific financial X (Twitter) accounts to extract their latest stock picks.
-- **Direct Ticker**: Type any ticker (e.g., `AAPL`) for an instant fundamental deep-dive.
-
-### 2. The Morning Cron (`src/whale_hunter.py`)
-A headless version of the agent designed to run as a **GitHub Action** every morning. It autonomously hunts a new stock, runs it through the Gatekeeper, has the Analyst ReAct node evaluate it, and sends a beautifully formatted HTML report directly to your inbox via Resend.
+| Feature | Where | Purpose |
+|---------|-------|---------|
+| Partial state updates | All agent nodes | Nodes return `dict` with only changed keys |
+| `Annotated` reducers | `src/core/state.py` | `candidates` and `candidate_scores` use `operator.add` |
+| `Command` pattern | Gatekeeper nodes | Combines state update + routing in a single return |
+| `Send` API | `whale_hunter.py` orchestrator | Parallel fan-out across 4 market regions |
+| `InMemorySaver` | All 3 graphs | Checkpointing with `thread_id` for state persistence |
+| `RetryPolicy` | All nodes | `max_attempts=3, initial_interval=2.0` for transient errors |
+| `recursion_limit` | All `invoke()` calls | Set to 30 to prevent infinite loops |
+| Structured output | Analyst nodes | `with_structured_output(InvestmentVerdict)` for validated verdicts |
+| `START` / `END` | All graphs | Modern entry-point API (no deprecated `set_entry_point`) |
 
 ---
 
-## ⚙️ Quick Start Guide
+## Key Modules
+
+### The Interactive UI (`app.py`)
+A Chainlit-powered chat interface.
+- **`AUTO`** — Smart scan (yFinance screener + Brave trending)
+- **`@Handle`** — Social scout from X/Twitter accounts
+- **`PORTFOLIO`** — View the agent's paper trade track record
+- **`BACKTEST`** — Run backtest on paper portfolio
+- **Direct Ticker** — Type any ticker (e.g., `AAPL`) for an instant deep-dive
+
+### The Morning Cron (`src/whale_hunter.py`)
+Headless agent running as a **GitHub Action** daily cron. Hunts all 4 regions in parallel, evaluates candidates through the full pipeline, and emails HTML reports via Resend.
+
+### VPS Data Layer (`vps/`)
+Optional **FastAPI + DuckDB** backend deployed on a VPS (behind Tailscale) that replaces local JSON files for persistence:
+- `seen_tickers` — Prevents re-analysing the same ticker within 30 days
+- `paper_portfolio` — Records all BUY/STRONG BUY/WATCH paper trades
+- `agent_runs` — Operational metrics for LangSmith correlation
+
+The agent (`src/core/memory.py`, `src/portfolio_tracker.py`) auto-detects the VPS via `VPS_API_URL` env var and falls back to local JSON files when unavailable.
+
+### Structured Verdicts (`src/models/verdict.py`)
+Pydantic model enforcing one of 4 verdict types:
+```
+STRONG BUY | BUY | WATCH | AVOID
+```
+Used via `llm.with_structured_output(InvestmentVerdict)` with a graceful fallback to plain text LLM output.
+
+---
+
+## Quick Start Guide
 
 ### 1. Environment Setup
-Create a virtual environment and install the required LangChain and Finnhub dependencies:
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ### 2. Configuration (`.env`)
-You must provide the following API keys in your `.env` file for the agent to function:
 ```env
-OPENROUTER_API_KEY=your_key_here    # LLM Inference
-FINNHUB_API_KEY=your_key_here       # Deep Fundamentals & Insider Data
-BRAVE_API_KEY=your_key_here         # Web Search
-RESEND_API_KEY=your_key_here        # Email Reporting (Cron only)
+OPENROUTER_API_KEY=your_key       # LLM Inference (5-model fallback chain)
+FINNHUB_API_KEY=your_key          # Deep Fundamentals & Insider Data
+BRAVE_API_KEY=your_key            # Web Search
+RESEND_API_KEY_CISCO=your_key     # Email Reporting (Cron only)
+
+# Optional: VPS Data API
+VPS_API_URL=http://your-vps:8080
+VPS_API_KEY=your_vps_key
 ```
 
 ### 3. Launching the UI
-To start the interactive chat interface locally:
 ```bash
 chainlit run app.py -w
 ```
 
-## 🧠 The Philosophy
-PrimoGreedy does not try to predict the future. It relies on strict Benjamin Graham math (Intrinsic Value = Sqrt(22.5 * EPS * BookValue)) to establish a baseline Margin of Safety, and then relies on Peter Lynch's logic and Charlie Munger's inversion to find the catch. It is designed to say "AVOID" far more often than it says "BUY."
+### 4. Running the Workflow CLI
+```bash
+python3 main.py
+```
+
+### 5. Deploying the VPS API (optional)
+```bash
+bash vps/deploy.sh
+```
+
+---
+
+## Project Structure
+
+```
+primogreedy/
+├── app.py                          # Chainlit web UI entry point
+├── main.py                         # Workflow CLI entry point
+├── requirements.txt                # Python dependencies (LangChain 1.0 LTS)
+├── src/
+│   ├── agent.py                    # Interactive Chainlit pipeline (scout/gatekeeper/analyst)
+│   ├── whale_hunter.py             # Daily cron pipeline + parallel Send orchestrator
+│   ├── llm.py                      # OpenRouter LLM with 5-model fallback chain
+│   ├── finance_tools.py            # Finnhub tools (@tool decorated)
+│   ├── portfolio_tracker.py        # Paper trade recording + evaluation
+│   ├── email_utils.py              # Resend email dispatch
+│   ├── core/
+│   │   ├── state.py                # AgentState (TypedDict with Annotated reducers)
+│   │   ├── memory.py               # Seen-tickers ledger (VPS or local JSON)
+│   │   ├── search.py               # Brave Search wrapper
+│   │   ├── ticker_utils.py         # Ticker extraction, suffix resolution
+│   │   └── logger.py               # Logging config
+│   ├── models/
+│   │   └── verdict.py              # InvestmentVerdict Pydantic model
+│   ├── agents/                     # Workflow pipeline nodes
+│   │   ├── data_collection_agent.py
+│   │   ├── technical_analysis_agent.py
+│   │   ├── news_intelligence_agent.py
+│   │   └── portfolio_manager_agent.py
+│   ├── workflows/
+│   │   ├── workflow.py             # 4-node linear workflow graph
+│   │   └── state.py                # Workflow-specific AgentState
+│   ├── discovery/
+│   │   ├── screener.py             # yFinance micro-cap screener
+│   │   ├── scoring.py              # Quantitative candidate scoring
+│   │   └── insider_feed.py         # SEC EDGAR / Finnhub insider data
+│   └── prompts/
+│       └── senior_broker.py        # LangSmith Hub prompt template
+├── vps/
+│   ├── api.py                      # FastAPI + DuckDB data API
+│   ├── schema.sql                  # DuckDB table definitions
+│   ├── deploy.sh                   # VPS deployment script
+│   └── requirements.txt            # VPS-specific dependencies
+└── .github/workflows/
+    └── hunter.yml                  # Daily cron GitHub Action
+```
+
+---
+
+## The Philosophy
+
+PrimoGreedy does not try to predict the future. It relies on strict **Benjamin Graham** math (`Intrinsic Value = sqrt(22.5 * EPS * BookValue)`) to establish a baseline Margin of Safety, then applies **Peter Lynch's** logic to find the catalyst and **Charlie Munger's** inversion to find the catch. It is designed to say **AVOID** far more often than it says **BUY**.
