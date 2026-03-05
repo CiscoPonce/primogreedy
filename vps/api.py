@@ -48,13 +48,14 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS paper_portfolio (
-            id          INTEGER PRIMARY KEY DEFAULT nextval('portfolio_seq'),
-            ticker      VARCHAR NOT NULL,
-            entry_price DOUBLE NOT NULL,
-            date        DATE NOT NULL,
-            verdict     VARCHAR NOT NULL,
-            source      VARCHAR DEFAULT 'unknown',
-            created_at  TIMESTAMP DEFAULT current_timestamp,
+            id            INTEGER PRIMARY KEY DEFAULT nextval('portfolio_seq'),
+            ticker        VARCHAR NOT NULL,
+            entry_price   DOUBLE NOT NULL,
+            date          DATE NOT NULL,
+            verdict       VARCHAR NOT NULL,
+            source        VARCHAR DEFAULT 'unknown',
+            position_size DOUBLE DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT current_timestamp,
             UNIQUE (ticker, date)
         );
 
@@ -113,6 +114,7 @@ class TradeIn(BaseModel):
     date: str  # YYYY-MM-DD
     verdict: str
     source: str = "unknown"
+    position_size: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +191,9 @@ def record_trade(body: TradeIn, x_api_key: str = Header(...)):
     con = get_db()
     try:
         con.execute(
-            """INSERT INTO paper_portfolio (ticker, entry_price, date, verdict, source)
-               VALUES (?, ?, ?, ?, ?)""",
-            [body.ticker, body.entry_price, body.date, body.verdict, body.source],
+            """INSERT INTO paper_portfolio (ticker, entry_price, date, verdict, source, position_size)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [body.ticker, body.entry_price, body.date, body.verdict, body.source, body.position_size],
         )
     except duckdb.ConstraintException:
         con.close()

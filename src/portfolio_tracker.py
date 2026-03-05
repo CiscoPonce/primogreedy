@@ -26,6 +26,7 @@ def record_paper_trade(
     verdict: str,
     source: str,
     structured_verdict: str | None = None,
+    position_size: float = 0.0,
 ) -> None:
     """Save a BUY/STRONG BUY/WATCH recommendation to the paper portfolio.
 
@@ -62,6 +63,7 @@ def record_paper_trade(
                     "date": today,
                     "verdict": trade_type,
                     "source": source,
+                    "position_size": position_size,
                 },
                 timeout=5,
             )
@@ -93,6 +95,7 @@ def record_paper_trade(
             "date": today,
             "verdict": trade_type,
             "source": source,
+            "position_size": position_size,
         }
 
         portfolio.append(trade)

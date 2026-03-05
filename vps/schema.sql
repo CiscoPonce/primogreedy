@@ -11,13 +11,14 @@ CREATE TABLE IF NOT EXISTS seen_tickers (
 
 -- Paper portfolio — replaces paper_portfolio.json
 CREATE TABLE IF NOT EXISTS paper_portfolio (
-    id          INTEGER PRIMARY KEY DEFAULT nextval('portfolio_seq'),
-    ticker      VARCHAR NOT NULL,
-    entry_price DOUBLE NOT NULL,
-    date        DATE NOT NULL,
-    verdict     VARCHAR NOT NULL,
-    source      VARCHAR DEFAULT 'unknown',
-    created_at  TIMESTAMP DEFAULT current_timestamp,
+    id            INTEGER PRIMARY KEY DEFAULT nextval('portfolio_seq'),
+    ticker        VARCHAR NOT NULL,
+    entry_price   DOUBLE NOT NULL,
+    date          DATE NOT NULL,
+    verdict       VARCHAR NOT NULL,
+    source        VARCHAR DEFAULT 'unknown',
+    position_size DOUBLE DEFAULT 0,
+    created_at    TIMESTAMP DEFAULT current_timestamp,
     UNIQUE (ticker, date)  -- prevent duplicate same-day entries
 );
 

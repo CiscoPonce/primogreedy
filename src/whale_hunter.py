@@ -207,12 +207,24 @@ def analyst_node(state):
     # Gather context
     news = brave_search(f"{ticker} stock analysis catalysts")
 
+    # SEC EDGAR ground truth (US equities only)
+    sec_context = ""
+    if region == "USA" and "." not in ticker:
+        from src.sec_edgar import get_sec_filings
+        try:
+            sec_context = get_sec_filings.invoke({"ticker": ticker})
+        except Exception as exc:
+            logger.warning("SEC EDGAR failed for %s: %s", ticker, exc)
+
     prompt = f"""
     Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
     
     HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
     QUANTITATIVE THESIS: {thesis}
     """
+
+    if sec_context:
+        prompt += f"\n{sec_context}\n"
 
     # Agentic tool calling for USA stocks via Finnhub + insider feed
     if region == "USA" and "." not in ticker:
@@ -256,11 +268,20 @@ def analyst_node(state):
 
     try:
         from src.models.verdict import InvestmentVerdict
+        from src.models.kelly import get_kelly_stats, calculate_position_size
+
         structured_llm = get_llm().with_structured_output(InvestmentVerdict)
         result = structured_llm.invoke(prompt)
+
+        stats = get_kelly_stats()
+        result.position_size = calculate_position_size(stats, result.verdict)
+        result.kelly_win_rate = stats.win_rate
+        result.kelly_total_trades = stats.total_trades
+
         verdict = result.to_report()
         record_paper_trade(ticker, price, verdict, source="Morning Cron",
-                           structured_verdict=result.verdict)
+                           structured_verdict=result.verdict,
+                           position_size=result.position_size)
     except Exception as exc:
         logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
         try:
