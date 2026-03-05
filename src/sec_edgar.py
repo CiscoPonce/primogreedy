@@ -67,7 +67,7 @@ def _search_filings(ticker: str) -> dict | None:
     }
 
     try:
-        resp = requests.get(_EFTS_URL, params=params, headers=_SEC_HEADERS, timeout=15)
+        resp = requests.get(_EFTS_URL, params=params, headers=_SEC_HEADERS, timeout=10)
         if resp.status_code != 200:
             logger.info("EDGAR EFTS returned %d for %s", resp.status_code, ticker)
             return None
@@ -118,7 +118,7 @@ def _fetch_filing_index(entity_id: str, accession: str) -> str | None:
         resp = requests.get(
             index_url,
             headers={**_SEC_HEADERS, "Accept": "text/html"},
-            timeout=15,
+            timeout=10,
         )
         if resp.status_code != 200:
             return None
@@ -240,14 +240,14 @@ def get_sec_filings(ticker: str) -> str:
         resp = requests.get(
             doc_url,
             headers={**_SEC_HEADERS, "Accept": "text/html"},
-            timeout=30,
+            timeout=15,
         )
         if resp.status_code != 200:
             return ""
 
-        if len(resp.text) > 5_000_000:
+        if len(resp.text) > 2_000_000:
             logger.info("SEC filing too large (%d bytes), truncating", len(resp.text))
-            html = resp.text[:5_000_000]
+            html = resp.text[:2_000_000]
         else:
             html = resp.text
 

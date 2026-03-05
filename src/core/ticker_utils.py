@@ -37,6 +37,9 @@ NOISE_WORDS = frozenset({
     "PER", "SET", "TRY", "LET", "PUT", "END", "ADD", "PAY",
     "OF", "OR", "IF", "IN", "ON", "AT", "TO", "UP", "BY", "SO", "NO",
     "DO", "AS", "AN", "IS", "IT", "BE", "WE", "GO", "MY", "VS",
+    # Financial acronyms / index names that aren't tradeable tickers
+    "ROCE", "FTSE", "DJIA", "EBIT", "WACC", "CAGR", "ROIC", "REIT",
+    "SPAC", "NBER", "OPEC", "MSCI", "EMEA", "APAC", "OECD", "FIFO",
 })
 
 _MAX_TICKER_LEN = 8  # longest valid ticker with suffix: e.g. CHE.UN.TO

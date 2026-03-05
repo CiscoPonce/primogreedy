@@ -7,6 +7,7 @@ the portfolio tracker layer.
 
 import json
 import os
+import time
 from dataclasses import dataclass
 
 import requests
@@ -22,6 +23,9 @@ VPS_API_URL = os.getenv("VPS_API_URL", "").rstrip("/")
 VPS_API_KEY = os.getenv("VPS_API_KEY", "")
 
 _MIN_TRADES_FOR_KELLY = 5
+
+_cache: dict = {"stats": None, "ts": 0}
+_CACHE_TTL = 600  # 10 minutes — enough for an entire cron run
 
 _VERDICT_SCALE = {
     "STRONG BUY": 1.0,
@@ -109,10 +113,17 @@ def _trades_from_local() -> list[dict]:
 def get_kelly_stats() -> KellyStats:
     """Compute Kelly Criterion inputs from historical portfolio data.
 
+    Results are cached for ``_CACHE_TTL`` seconds so that multiple
+    analyst_node calls within a single cron run don't each trigger
+    expensive live-price lookups for the entire portfolio.
+
     Tries the VPS endpoint first, falls back to local JSON.
     Returns conservative defaults (``half_kelly=0``) when fewer than
     ``_MIN_TRADES_FOR_KELLY`` trades exist.
     """
+    if _cache["stats"] is not None and (time.time() - _cache["ts"]) < _CACHE_TTL:
+        return _cache["stats"]
+
     trades = _trades_from_vps()
     if trades is None:
         trades = _trades_from_local()
@@ -121,7 +132,7 @@ def get_kelly_stats() -> KellyStats:
     total = len(valid)
 
     if total < _MIN_TRADES_FOR_KELLY:
-        return KellyStats(
+        result = KellyStats(
             total_trades=total,
             win_rate=0.0,
             avg_win_pct=0.0,
@@ -129,6 +140,9 @@ def get_kelly_stats() -> KellyStats:
             kelly_fraction=0.0,
             half_kelly=0.0,
         )
+        _cache["stats"] = result
+        _cache["ts"] = time.time()
+        return result
 
     winners = [t["gain_pct"] for t in valid if t["gain_pct"] > 0]
     losers = [abs(t["gain_pct"]) for t in valid if t["gain_pct"] <= 0]
@@ -148,7 +162,7 @@ def get_kelly_stats() -> KellyStats:
 
     kelly = max(kelly, 0.0)
 
-    return KellyStats(
+    result = KellyStats(
         total_trades=total,
         win_rate=win_rate,
         avg_win_pct=avg_win,
@@ -156,6 +170,13 @@ def get_kelly_stats() -> KellyStats:
         kelly_fraction=kelly,
         half_kelly=kelly / 2,
     )
+    _cache["stats"] = result
+    _cache["ts"] = time.time()
+    logger.info(
+        "Kelly stats: %d trades, %.0f%% win rate, half-Kelly=%.4f",
+        total, win_rate * 100, kelly / 2,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

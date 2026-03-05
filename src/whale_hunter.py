@@ -267,11 +267,14 @@ def analyst_node(state):
     """
 
     try:
+        import warnings
         from src.models.verdict import InvestmentVerdict
         from src.models.kelly import get_kelly_stats, calculate_position_size
 
         structured_llm = get_llm().with_structured_output(InvestmentVerdict)
-        result = structured_llm.invoke(prompt)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+            result = structured_llm.invoke(prompt)
 
         stats = get_kelly_stats()
         result.position_size = calculate_position_size(stats, result.verdict)
