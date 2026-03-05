@@ -1,6 +1,8 @@
 import json
 import os
 from datetime import datetime
+
+import requests
 import yfinance as yf
 from src.core.logger import get_logger
 from src.core.ticker_utils import normalize_price
@@ -9,29 +11,77 @@ logger = get_logger(__name__)
 
 PORTFOLIO_FILE = "paper_portfolio.json"
 
+# VPS Data API (optional — falls back to local JSON if not set)
+VPS_API_URL = os.getenv("VPS_API_URL", "").rstrip("/")
+VPS_API_KEY = os.getenv("VPS_API_KEY", "")
 
-def record_paper_trade(ticker: str, entry_price: float, verdict: str, source: str) -> None:
-    """Save a BUY/STRONG BUY/WATCH recommendation to the paper portfolio."""
-    v_upper = verdict.strip().upper()
 
-    trade_type = None
-    if "STRONG BUY" in v_upper:
-        trade_type = "STRONG BUY"
-    elif " BUY" in v_upper or v_upper.startswith("BUY"):
-        trade_type = "BUY"
-    elif "WATCH" in v_upper:
-        trade_type = "WATCH"
+def _vps_headers() -> dict:
+    return {"X-API-Key": VPS_API_KEY, "Content-Type": "application/json"}
+
+
+def record_paper_trade(
+    ticker: str,
+    entry_price: float,
+    verdict: str,
+    source: str,
+    structured_verdict: str | None = None,
+) -> None:
+    """Save a BUY/STRONG BUY/WATCH recommendation to the paper portfolio.
+
+    When *structured_verdict* is supplied (from ``InvestmentVerdict.verdict``),
+    it is used directly, skipping brittle string matching on the full report.
+    """
+    if structured_verdict:
+        _VALID = {"STRONG BUY", "BUY", "WATCH"}
+        trade_type = structured_verdict if structured_verdict in _VALID else None
+    else:
+        v_upper = verdict.strip().upper()
+        trade_type = None
+        if "STRONG BUY" in v_upper:
+            trade_type = "STRONG BUY"
+        elif " BUY" in v_upper or v_upper.startswith("BUY"):
+            trade_type = "BUY"
+        elif "WATCH" in v_upper:
+            trade_type = "WATCH"
 
     if not trade_type:
         return
 
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Try VPS first
+    if VPS_API_URL:
+        try:
+            resp = requests.post(
+                f"{VPS_API_URL}/portfolio",
+                headers=_vps_headers(),
+                json={
+                    "ticker": ticker,
+                    "entry_price": entry_price,
+                    "date": today,
+                    "verdict": trade_type,
+                    "source": source,
+                },
+                timeout=5,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("status") == "duplicate":
+                logger.info("Duplicate trade skipped (VPS): %s on %s", ticker, today)
+            else:
+                logger.info("Paper trade recorded (VPS): %s %s @ $%.2f", trade_type, ticker, entry_price)
+            return
+        except Exception as exc:
+            logger.warning("VPS record_paper_trade failed, using local fallback: %s", exc)
+
+    # Local fallback
     try:
         portfolio = []
         if os.path.exists(PORTFOLIO_FILE):
             with open(PORTFOLIO_FILE, "r") as f:
                 portfolio = json.load(f)
 
-        today = datetime.now().strftime("%Y-%m-%d")
         for trade in portfolio:
             if trade["ticker"] == ticker and trade["date"] == today:
                 logger.info("Duplicate trade skipped: %s on %s", ticker, today)
@@ -58,6 +108,54 @@ def record_paper_trade(ticker: str, entry_price: float, verdict: str, source: st
 
 def evaluate_portfolio() -> str:
     """Read the paper portfolio and calculate live performance."""
+
+    # Try VPS first
+    if VPS_API_URL:
+        try:
+            resp = requests.get(
+                f"{VPS_API_URL}/portfolio/evaluate",
+                headers=_vps_headers(),
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if not data.get("trades"):
+                return "**Paper Portfolio is empty.** The Agent hasn't tracked any stocks yet."
+
+            report = "## PrimoGreedy Agent Track Record\n\n"
+            report += "| Ticker | Date Called | Entry Price | Current Price | Return | Verdict |\n"
+            report += "|--------|-------------|-------------|---------------|--------|--------|\n"
+
+            for t in data["trades"]:
+                if t["gain_pct"] is not None:
+                    emoji = "+" if t["gain_pct"] > 0 else ""
+                    report += (
+                        f"| **{t['ticker']}** | {t['date']} | ${t['entry']:.2f} | "
+                        f"${t['current']:.2f} | {emoji}{t['gain_pct']:.2f}% | {t['verdict']} |\n"
+                    )
+                else:
+                    report += (
+                        f"| **{t['ticker']}** | {t['date']} | ${t['entry']:.2f} | "
+                        f"Error | N/A | {t['verdict']} |\n"
+                    )
+
+            report += f"\n### Agent Performance Summary\n"
+            report += f"- **Total Calls:** {data['total_calls']}\n"
+            report += f"- **Win Rate:** {data['win_rate']}%\n"
+            report += f"- **Average Return per Trade:** {data['avg_return']}%\n"
+
+            return report
+
+        except Exception as exc:
+            logger.warning("VPS evaluate_portfolio failed, using local fallback: %s", exc)
+
+    # Local fallback (original behavior)
+    return _evaluate_local()
+
+
+def _evaluate_local() -> str:
+    """Evaluate portfolio from local JSON file."""
     if not os.path.exists(PORTFOLIO_FILE):
         return "**Paper Portfolio is empty.** The Agent hasn't tracked any stocks yet."
 
@@ -74,7 +172,7 @@ def evaluate_portfolio() -> str:
 
         report = "## PrimoGreedy Agent Track Record\n\n"
         report += "| Ticker | Date Called | Entry Price | Current Price | Return | Verdict |\n"
-        report += "|--------|-------------|-------------|---------------|--------|---------|\n"
+        report += "|--------|-------------|-------------|---------------|--------|--------|\n"
 
         for trade in portfolio:
             ticker = trade["ticker"]

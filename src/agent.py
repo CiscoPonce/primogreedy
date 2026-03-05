@@ -10,7 +10,10 @@ import random
 import time
 import yfinance as yf
 import matplotlib.pyplot as plt
-from langgraph.graph import StateGraph, END
+from typing import Literal
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command, RetryPolicy
 
 from src.llm import get_llm, invoke_with_fallback
 from src.finance_tools import (
@@ -128,18 +131,31 @@ def scout_node(state):
     return {"ticker": ticker, "manual_search": False}
 
 
-def gatekeeper_node(state):
-    """Validate candidate with financial health checks."""
+def _gatekeeper_route(state, update) -> str:
+    """Decide where gatekeeper should route based on state + update."""
+    if state.get("manual_search"):
+        return "analyst"
+    if update.get("status") == "PASS":
+        return "analyst"
+    new_retries = update.get("retry_count", state.get("retry_count", 0))
+    if new_retries >= MAX_RETRIES:
+        return "analyst"
+    return "scout"
+
+
+def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
+    """Validate candidate with financial health checks. Routes via Command."""
     ticker = state.get("ticker", "NONE")
     retries = state.get("retry_count", 0)
 
     if ticker == "NONE":
-        return {
+        update = {
             "is_small_cap": False,
             "status": "FAIL",
             "retry_count": retries + 1,
             "financial_data": {"reason": "Scout found no readable ticker."},
         }
+        return Command(update=update, goto=_gatekeeper_route(state, update))
 
     mark_ticker_seen(ticker)
 
@@ -168,7 +184,7 @@ def gatekeeper_node(state):
         chart_bytes = generate_chart(ticker)
 
         if price > MAX_PRICE_PER_SHARE:
-            return {
+            update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
                 "status": "FAIL",
@@ -178,9 +194,10 @@ def gatekeeper_node(state):
                 "final_report": f"Price ${price:.2f} exceeds ${MAX_PRICE_PER_SHARE} limit.",
                 "chart_data": chart_bytes,
             }
+            return Command(update=update, goto=_gatekeeper_route(state, update))
 
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
-            return {
+            update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
                 "status": "FAIL",
@@ -190,10 +207,11 @@ def gatekeeper_node(state):
                 "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range.",
                 "chart_data": chart_bytes,
             }
+            return Command(update=update, goto=_gatekeeper_route(state, update))
 
         health = check_financial_health(ticker, lean_info)
         if health["status"] == "FAIL":
-            return {
+            update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
                 "status": "FAIL",
@@ -203,8 +221,9 @@ def gatekeeper_node(state):
                 "final_report": f"**GATEKEEPER REJECT:** {health['reason']}",
                 "chart_data": chart_bytes,
             }
+            return Command(update=update, goto=_gatekeeper_route(state, update))
 
-        return {
+        update = {
             "market_cap": mkt_cap,
             "is_small_cap": True,
             "status": "PASS",
@@ -212,15 +231,17 @@ def gatekeeper_node(state):
             "financial_data": lean_info,
             "chart_data": chart_bytes,
         }
+        return Command(update=update, goto="analyst")
 
     except Exception as exc:
         logger.error("Gatekeeper error for %s: %s", ticker, exc)
-        return {
+        update = {
             "is_small_cap": False,
             "status": "FAIL",
             "retry_count": retries + 1,
             "financial_data": {"reason": f"API Error: {exc}"},
         }
+        return Command(update=update, goto=_gatekeeper_route(state, update))
 
 
 def analyst_node(state):
@@ -299,22 +320,33 @@ def analyst_node(state):
     )
 
     try:
-        verdict = invoke_with_fallback(prompt, run_name="analyst_node")
-        record_paper_trade(ticker, price, verdict, source="Chainlit UI")
+        from src.models.verdict import InvestmentVerdict
+        structured_llm = get_llm().with_structured_output(InvestmentVerdict)
+        result = structured_llm.invoke(prompt)
+        verdict = result.to_report()
+        record_paper_trade(ticker, price, verdict, source="Chainlit UI",
+                           structured_verdict=result.verdict)
     except Exception as exc:
-        logger.error("LLM analysis failed for %s: %s", ticker, exc)
-        verdict = f"Strategy: {strategy}\nLLM analysis unavailable: {exc}"
+        logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
+        try:
+            verdict = invoke_with_fallback(prompt, run_name="analyst_node")
+            record_paper_trade(ticker, price, verdict, source="Chainlit UI")
+        except Exception as exc2:
+            logger.error("LLM analysis failed for %s: %s", ticker, exc2)
+            verdict = f"Strategy: {strategy}\nLLM analysis unavailable: {exc2}"
 
     return {"final_verdict": verdict, "final_report": verdict, "chart_data": chart_bytes}
 
 
 # --- GRAPH ---
 
+_api_retry = RetryPolicy(max_attempts=3, initial_interval=2.0)
+
 workflow = StateGraph(AgentState)
-workflow.add_node("chat", chat_node)
-workflow.add_node("scout", scout_node)
-workflow.add_node("gatekeeper", gatekeeper_node)
-workflow.add_node("analyst", analyst_node)
+workflow.add_node("chat", chat_node, retry=_api_retry)
+workflow.add_node("scout", scout_node, retry=_api_retry)
+workflow.add_node("gatekeeper", gatekeeper_node, retry=_api_retry)
+workflow.add_node("analyst", analyst_node, retry=_api_retry)
 
 
 def initial_routing(state):
@@ -325,29 +357,9 @@ def initial_routing(state):
     return "scout"
 
 
-workflow.set_conditional_entry_point(
-    initial_routing,
-    {"chat": "chat", "scout": "scout"},
-)
-
-
-def check_status(state):
-    if state.get("manual_search"):
-        return "analyst"
-    if state.get("status") == "PASS":
-        return "analyst"
-    if state.get("retry_count", 0) >= MAX_RETRIES:
-        return "analyst"
-    return "scout"
-
-
+workflow.add_conditional_edges(START, initial_routing, ["chat", "scout"])
 workflow.add_edge("chat", END)
 workflow.add_edge("scout", "gatekeeper")
-workflow.add_conditional_edges(
-    "gatekeeper",
-    check_status,
-    {"analyst": "analyst", "scout": "scout"},
-)
 workflow.add_edge("analyst", END)
 
-app = workflow.compile()
+app = workflow.compile(checkpointer=InMemorySaver())

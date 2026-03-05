@@ -389,31 +389,19 @@ def read_historical_context(symbol: str, analysis_date: Optional[str] = None) ->
         return []
 
 
-async def portfolio_manager_agent_node(state: AgentState) -> AgentState:
-    """
-    Portfolio Manager Agent node for the workflow.
-    
-    Args:
-        state: Current state of the workflow
-        
-    Returns:
-        Updated state with portfolio management results
-    """
+async def portfolio_manager_agent_node(state: AgentState) -> dict:
+    """Portfolio Manager Agent node. Returns partial state updates."""
     try:
         symbols = state.get('symbols', [])
         if not symbols:
-            state['error'] = "No symbols found in state for Portfolio Manager"
-            return state
-            
-        # Since we process one symbol at a time in this design
+            return {"error": "No symbols found in state for Portfolio Manager"}
+
         symbol = symbols[0]
         
-        # Get data directly from the state
         tech_results = state.get('technical_analysis_results', {})
         news_results = state.get('news_intelligence_results', {})
         data_collection_results = state.get('data_collection_results', {})
         
-        # Add data_collection_results to tech_results for access to basic_financials
         if isinstance(tech_results, dict):
             tech_results_with_data = {
                 **tech_results,
@@ -424,22 +412,18 @@ async def portfolio_manager_agent_node(state: AgentState) -> AgentState:
                 'data_collection_results': data_collection_results
             }
         
-        # Analyze portfolio for the single symbol
         analysis_date = state.get('analysis_date')
         analysis_result = await analyze_portfolio(
             symbol, tech_results_with_data, news_results, analysis_date
         )
         
-        # Structure the result under the symbol key
         all_results = {symbol: analysis_result}
         
-        # Update the main state with the results
-        state['portfolio_manager_results'] = all_results
-        state['current_step'] = 'portfolio_management_complete'
-        
-        return state
+        return {
+            "portfolio_manager_results": all_results,
+            "current_step": "portfolio_management_complete",
+        }
         
     except Exception as e:
         print(f"Error in portfolio_manager_agent_node: {e}")
-        state['error'] = f"Portfolio Manager Agent failed: {e}"
-        return state 
+        return {"error": f"Portfolio Manager Agent failed: {e}"}

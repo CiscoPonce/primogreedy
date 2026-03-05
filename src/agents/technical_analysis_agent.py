@@ -106,37 +106,25 @@ async def analyze_technical(symbol: str, analysis_date: Optional[str] = None, ma
         }
 
 
-async def technical_analysis_agent_node(state: AgentState) -> AgentState:
-    """
-    LangGraph node for technical analysis.
-    
-    Args:
-        state: Current workflow state
-        
-    Returns:
-        Updated state with technical analysis results
-    """
+async def technical_analysis_agent_node(state: AgentState) -> dict:
+    """LangGraph node for technical analysis. Returns partial state updates."""
     try:
-        # Get symbol, analysis_date and market data from previous agent
         symbol = state['symbols'][0] if state['symbols'] else 'AAPL'
         analysis_date = state['analysis_date']
         data_collection_results = state.get('data_collection_results')
         market_data = data_collection_results.get('market_data') if data_collection_results else None
         
-        # Perform technical analysis with analysis_date
         result = await analyze_technical(symbol, analysis_date, market_data)
         
-        # Update state
-        state['technical_analysis_results'] = result
-        state['current_step'] = 'technical_analysis_complete'
-        
+        updates: dict = {
+            "technical_analysis_results": result,
+            "current_step": "technical_analysis_complete",
+        }
         if not result['success']:
-            state['error'] = result.get('error', 'Technical analysis failed')
-            
-        return state
+            updates["error"] = result.get('error', 'Technical analysis failed')
+
+        return updates
         
     except Exception as e:
         print(f"Technical analysis node error: {e}")
-        state['error'] = str(e)
-        state['current_step'] = 'error'
-        return state 
+        return {"error": str(e), "current_step": "error"}

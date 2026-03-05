@@ -1,4 +1,5 @@
-from typing import TypedDict
+import operator
+from typing import Annotated, TypedDict
 
 
 class AgentState(TypedDict, total=False):
@@ -8,7 +9,7 @@ class AgentState(TypedDict, total=False):
     """
     region: str
     ticker: str
-    candidates: list
+    candidates: Annotated[list, operator.add]
     company_name: str
     market_cap: float
     is_small_cap: bool
@@ -19,4 +20,4 @@ class AgentState(TypedDict, total=False):
     final_report: str
     chart_data: bytes
     manual_search: bool
-    candidate_scores: list  # [{ticker, score, metrics}, ...]
+    candidate_scores: Annotated[list, operator.add]

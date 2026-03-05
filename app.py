@@ -90,7 +90,7 @@ async def main(message: cl.Message):
     elif " " in user_input:
         await cl.Message(content="Consulting Senior Broker...").send()
         try:
-            config = {"configurable": {"thread_id": "ui_session"}}
+            config = {"configurable": {"thread_id": "ui_session"}, "recursion_limit": 30}
             result = await app.ainvoke(
                 {"ticker": user_input, "retry_count": 0, "manual_search": False},
                 config=config,
@@ -112,7 +112,7 @@ async def main(message: cl.Message):
     for ticker in tickers:
         await cl.Message(content=f"--- **Processing:** {ticker} ---").send()
         try:
-            config = {"configurable": {"thread_id": "ui_session"}}
+            config = {"configurable": {"thread_id": "ui_session"}, "recursion_limit": 30}
             result = await app.ainvoke(
                 {"ticker": ticker, "retry_count": 0, "manual_search": True},
                 config=config,

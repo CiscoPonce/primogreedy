@@ -1,8 +1,11 @@
 """Daily automated micro-cap hunter (GitHub Actions cron).
 
-Pipeline:  Scout -> Gatekeeper -> Analyst -> Email
+Pipeline per region:  Scout -> Gatekeeper -> Analyst -> Email
 
-The Scout now uses a two-pronged discovery approach:
+An outer orchestrator graph dispatches all regions in parallel via the
+LangGraph ``Send`` API, then collects results.
+
+The Scout uses a two-pronged discovery approach:
   1. yFinance screener for systematic micro-cap filtering
   2. Brave Search for trending/momentum signals
   3. Quantitative scoring to pick the best candidate
@@ -11,10 +14,14 @@ Both feeds are merged, scored, and only the top candidate proceeds to
 the expensive LLM analyst step.
 """
 
+import operator
 import os
 import signal
 import time
-from langgraph.graph import StateGraph, END
+from typing import Annotated, Literal, TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command, RetryPolicy, Send
 
 from src.llm import get_llm, invoke_with_fallback
 from src.finance_tools import (
@@ -110,16 +117,22 @@ def scout_node(state):
     return {"ticker": ticker, "candidates": rest}
 
 
-def gatekeeper_node(state):
-    """Validate the candidate against hard financial criteria."""
+def gatekeeper_node(state) -> Command[Literal["analyst", "scout", "email"]]:
+    """Validate the candidate against hard financial criteria. Routes via Command."""
     import yfinance as yf
 
     ticker = state.get("ticker", "NONE")
     retries = state.get("retry_count", 0)
 
+    def _fail_route(new_retries: int) -> str:
+        if new_retries > MAX_RETRIES:
+            return "email"
+        return "scout"
+
     if ticker == "NONE":
         logger.warning("No ticker to evaluate")
-        return {"is_small_cap": False, "retry_count": retries + 1}
+        update = {"is_small_cap": False, "retry_count": retries + 1}
+        return Command(update=update, goto=_fail_route(retries + 1))
 
     logger.info("Gatekeeper evaluating %s...", ticker)
     try:
@@ -135,16 +148,19 @@ def gatekeeper_node(state):
 
         if price > MAX_PRICE_PER_SHARE:
             logger.info("%s rejected — price $%.2f > $%.2f", ticker, price, MAX_PRICE_PER_SHARE)
-            return {"is_small_cap": False, "retry_count": retries + 1}
+            update = {"is_small_cap": False, "retry_count": retries + 1}
+            return Command(update=update, goto=_fail_route(retries + 1))
 
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
             logger.info("%s rejected — cap $%s out of range", ticker, f"{mkt_cap:,.0f}")
-            return {"is_small_cap": False, "retry_count": retries + 1}
+            update = {"is_small_cap": False, "retry_count": retries + 1}
+            return Command(update=update, goto=_fail_route(retries + 1))
 
         health = check_financial_health(ticker, info)
         if health["status"] == "FAIL":
             logger.info("%s rejected — %s", ticker, health["reason"])
-            return {"is_small_cap": False, "retry_count": retries + 1}
+            update = {"is_small_cap": False, "retry_count": retries + 1}
+            return Command(update=update, goto=_fail_route(retries + 1))
 
         sector = health["metrics"].get("sector", "N/A")
         logger.info(
@@ -152,16 +168,18 @@ def gatekeeper_node(state):
             ticker, price, f"{mkt_cap:,.0f}", sector,
         )
 
-        return {
+        update = {
             "market_cap": mkt_cap,
             "is_small_cap": True,
             "company_name": name,
             "financial_data": info,
         }
+        return Command(update=update, goto="analyst")
 
     except Exception as exc:
         logger.error("yFinance error for %s: %s", ticker, exc)
-        return {"is_small_cap": False, "retry_count": retries + 1}
+        update = {"is_small_cap": False, "retry_count": retries + 1}
+        return Command(update=update, goto=_fail_route(retries + 1))
 
 
 def analyst_node(state):
@@ -237,11 +255,20 @@ def analyst_node(state):
     """
 
     try:
-        verdict = invoke_with_fallback(prompt)
-        record_paper_trade(ticker, price, verdict, source="Morning Cron")
+        from src.models.verdict import InvestmentVerdict
+        structured_llm = get_llm().with_structured_output(InvestmentVerdict)
+        result = structured_llm.invoke(prompt)
+        verdict = result.to_report()
+        record_paper_trade(ticker, price, verdict, source="Morning Cron",
+                           structured_verdict=result.verdict)
     except Exception as exc:
-        logger.error("LLM analysis failed for %s: %s", ticker, exc)
-        verdict = f"LLM analysis unavailable: {exc}"
+        logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
+        try:
+            verdict = invoke_with_fallback(prompt)
+            record_paper_trade(ticker, price, verdict, source="Morning Cron")
+        except Exception as exc2:
+            logger.error("LLM analysis failed for %s: %s", ticker, exc2)
+            verdict = f"LLM analysis unavailable: {exc2}"
 
     return {"final_verdict": verdict}
 
@@ -281,35 +308,71 @@ def email_node(state):
     return {}
 
 
-# --- GRAPH ---
+# ---------------------------------------------------------------------------
+# Per-region subgraph  (scout -> gatekeeper -> analyst -> email)
+# ---------------------------------------------------------------------------
 
-workflow = StateGraph(AgentState)
-workflow.add_node("scout", scout_node)
-workflow.add_node("gatekeeper", gatekeeper_node)
-workflow.add_node("analyst", analyst_node)
-workflow.add_node("email", email_node)
-workflow.set_entry_point("scout")
+_api_retry = RetryPolicy(max_attempts=3, initial_interval=2.0)
+
+_region_workflow = StateGraph(AgentState)
+_region_workflow.add_node("scout", scout_node, retry=_api_retry)
+_region_workflow.add_node("gatekeeper", gatekeeper_node, retry=_api_retry)
+_region_workflow.add_node("analyst", analyst_node, retry=_api_retry)
+_region_workflow.add_node("email", email_node, retry=_api_retry)
+_region_workflow.add_edge(START, "scout")
+_region_workflow.add_edge("scout", "gatekeeper")
+_region_workflow.add_edge("analyst", "email")
+_region_workflow.add_edge("email", END)
+_region_app = _region_workflow.compile(checkpointer=InMemorySaver())
 
 
-def check_status(state):
-    if state.get("is_small_cap"):
-        return "analyst"
-    if state.get("retry_count", 0) > MAX_RETRIES:
-        return "email"
-    return "scout"
+# ---------------------------------------------------------------------------
+# Orchestrator graph  (parallel fan-out via Send API)
+# ---------------------------------------------------------------------------
+
+class GlobalHunterState(TypedDict, total=False):
+    regions: list[str]
+    region_results: Annotated[list, operator.add]
 
 
-workflow.add_edge("scout", "gatekeeper")
-workflow.add_conditional_edges(
-    "gatekeeper",
-    check_status,
-    {"analyst": "analyst", "scout": "scout", "email": "email"},
-)
-workflow.add_edge("analyst", "email")
-workflow.add_edge("email", END)
-app = workflow.compile()
+def dispatch_regions(state: GlobalHunterState):
+    """Fan-out: emit one Send per region so they run in parallel."""
+    return [
+        Send("hunt_region", {"region": r})
+        for r in state["regions"]
+    ]
 
-# --- EXECUTION ---
+
+def hunt_region(state) -> dict:
+    """Invoke the full per-region pipeline and report back."""
+    region = state.get("region", "USA")
+    logger.info("--- Initiating hunt for %s ---", region)
+    try:
+        config = {
+            "configurable": {"thread_id": f"hunt-{region.lower()}"},
+            "recursion_limit": 30,
+        }
+        _region_app.invoke(
+            {"region": region, "retry_count": 0, "ticker": ""},
+            config,
+        )
+        logger.info("%s hunt complete.", region)
+        return {"region_results": [{"region": region, "success": True}]}
+    except Exception as exc:
+        logger.error("Error in %s: %s", region, exc, exc_info=True)
+        return {"region_results": [{"region": region, "success": False, "error": str(exc)}]}
+
+
+_orchestrator = StateGraph(GlobalHunterState)
+_orchestrator.add_node("hunt_region", hunt_region, retry=_api_retry)
+_orchestrator.add_conditional_edges(START, dispatch_regions, ["hunt_region"])
+_orchestrator.add_edge("hunt_region", END)
+app = _orchestrator.compile(checkpointer=InMemorySaver())
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     logger.info("Starting Global Micro-Cap Hunter (Screener + Brave Edition)...")
@@ -323,13 +386,11 @@ if __name__ == "__main__":
 
     regions = ["USA", "UK", "Canada", "Australia"]
 
-    for market in regions:
-        logger.info("--- Initiating hunt for %s ---", market)
-        try:
-            app.invoke({"region": market, "retry_count": 0, "ticker": ""})
-            logger.info("%s hunt complete.", market)
-            time.sleep(5)
-        except Exception as exc:
-            logger.error("Error in %s: %s", market, exc, exc_info=True)
+    config = {"configurable": {"thread_id": "global-hunt"}, "recursion_limit": 30}
+    result = app.invoke({"regions": regions}, config)
+
+    for entry in result.get("region_results", []):
+        status = "OK" if entry.get("success") else f"FAILED: {entry.get('error', 'unknown')}"
+        logger.info("Region %s: %s", entry.get("region"), status)
 
     logger.info("Global mission complete.")

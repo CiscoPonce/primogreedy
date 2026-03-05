@@ -45,6 +45,8 @@ jobs:
           LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
           LANGCHAIN_PROJECT: primogreedy
           LANGSMITH_WORKSPACE_ID: ${{ secrets.LANGSMITH_WORKSPACE_ID }}
+          VPS_API_URL: ${{ secrets.VPS_API_URL }}
+          VPS_API_KEY: ${{ secrets.VPS_API_KEY }}
         run: PYTHONPATH=. python src/whale_hunter.py
 
       # 🚨 CRITICAL NEW STEP: Save the memory file safely without crashing
