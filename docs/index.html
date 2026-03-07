@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrimoGreedy — AI Micro-Cap Hunter</title>
+  <style>
+    :root {
+      --bg: #0a0e17;
+      --surface: #111827;
+      --surface2: #1a2236;
+      --border: #1e293b;
+      --accent: #22d3ee;
+      --accent2: #a78bfa;
+      --green: #34d399;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --text-bright: #f8fafc;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    .grain {
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 60px 24px;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 800px;
+      background: radial-gradient(circle, rgba(34,211,238,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 13px;
+      color: var(--accent);
+      background: rgba(34,211,238,0.06);
+      margin-bottom: 32px;
+      letter-spacing: 0.5px;
+    }
+    .hero-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .hero h1 {
+      font-size: clamp(42px, 6vw, 72px);
+      font-weight: 800;
+      letter-spacing: -2px;
+      line-height: 1.05;
+      margin-bottom: 20px;
+    }
+    .hero h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { font-size: 18px; color: var(--text-dim); max-width: 620px; margin-bottom: 40px; }
+    .hero-stats {
+      display: flex;
+      gap: 48px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .hero-stat { text-align: center; }
+    .hero-stat .num { font-size: 36px; font-weight: 700; color: var(--text-bright); }
+    .hero-stat .label { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+    /* Section */
+    section { padding: 100px 0; }
+    .section-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: clamp(28px, 4vw, 40px);
+      font-weight: 700;
+      letter-spacing: -1px;
+      margin-bottom: 16px;
+    }
+    .section-desc { color: var(--text-dim); font-size: 16px; max-width: 600px; margin-bottom: 48px; }
+
+    /* Pipeline */
+    .pipeline {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 40px;
+      margin-bottom: 32px;
+      position: relative;
+      overflow: hidden;
+    }
+    .pipeline::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2), var(--green));
+    }
+    .pipeline h3 { font-size: 20px; margin-bottom: 8px; color: var(--text-bright); }
+    .pipeline .sub { font-size: 14px; color: var(--text-dim); margin-bottom: 24px; }
+    .flow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 13px;
+    }
+    .flow .node {
+      padding: 8px 14px;
+      border-radius: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .flow .node.active { border-color: var(--accent); box-shadow: 0 0 12px rgba(34,211,238,0.15); }
+    .flow .arrow { color: var(--text-dim); font-size: 18px; }
+    .pipeline-features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .pipeline-feature {
+      padding: 16px;
+      border-radius: 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+    }
+    .pipeline-feature .icon { font-size: 20px; margin-bottom: 8px; }
+    .pipeline-feature h4 { font-size: 14px; margin-bottom: 4px; color: var(--text-bright); }
+    .pipeline-feature p { font-size: 13px; color: var(--text-dim); }
+
+    /* Cards grid */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 28px;
+      transition: border-color 0.3s, transform 0.3s;
+    }
+    .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .card-icon {
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 10px;
+      font-size: 22px;
+      margin-bottom: 16px;
+    }
+    .card-icon.cyan { background: rgba(34,211,238,0.1); }
+    .card-icon.purple { background: rgba(167,139,250,0.1); }
+    .card-icon.green { background: rgba(52,211,153,0.1); }
+    .card-icon.yellow { background: rgba(251,191,36,0.1); }
+    .card-icon.red { background: rgba(248,113,113,0.1); }
+    .card h3 { font-size: 17px; margin-bottom: 8px; color: var(--text-bright); }
+    .card p { font-size: 14px; color: var(--text-dim); }
+
+    /* Sprint timeline */
+    .timeline { position: relative; padding-left: 32px; }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 11px; top: 0; bottom: 0;
+      width: 2px;
+      background: linear-gradient(180deg, var(--accent), var(--accent2), var(--green));
+    }
+    .timeline-item { position: relative; margin-bottom: 40px; }
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -32px; top: 6px;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      background: var(--bg);
+    }
+    .timeline-item.done::before { background: var(--green); border-color: var(--green); }
+    .timeline-item .sprint-tag {
+      display: inline-block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+    .timeline-item .sprint-tag.s7 { background: rgba(167,139,250,0.15); color: var(--accent2); }
+    .timeline-item .sprint-tag.s8 { background: rgba(34,211,238,0.15); color: var(--accent); }
+    .timeline-item .sprint-tag.s9 { background: rgba(52,211,153,0.15); color: var(--green); }
+    .timeline-item h3 { font-size: 18px; color: var(--text-bright); margin-bottom: 6px; }
+    .timeline-item p { font-size: 14px; color: var(--text-dim); }
+    .timeline-item ul { margin-top: 10px; padding-left: 18px; }
+    .timeline-item li { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+    .timeline-item li code { font-size: 12px; padding: 1px 6px; background: var(--surface2); border-radius: 4px; color: var(--accent); }
+
+    /* Tech stack */
+    .tech-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .tech-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 14px;
+      color: var(--text);
+    }
+    .tech-item .t-icon { font-size: 20px; flex-shrink: 0; }
+
+    /* Verdict sample */
+    .verdict-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 32px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      color: var(--text-dim);
+      overflow-x: auto;
+    }
+    .verdict-box .header { color: var(--accent); font-weight: 700; }
+    .verdict-box .buy { color: var(--green); font-weight: 700; }
+    .verdict-box .avoid { color: var(--red); font-weight: 700; }
+    .verdict-box .watch { color: var(--yellow); font-weight: 700; }
+    .verdict-box .bold { color: var(--text-bright); font-weight: 600; }
+
+    /* Philosophy */
+    .philosophy {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 48px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .philosophy::before {
+      content: '';
+      position: absolute;
+      bottom: -100px; right: -100px;
+      width: 300px; height: 300px;
+      background: radial-gradient(circle, rgba(167,139,250,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .philosophy blockquote {
+      font-size: 20px;
+      font-style: italic;
+      color: var(--text-bright);
+      max-width: 700px;
+      margin: 0 auto 20px;
+    }
+    .philosophy .attr { font-size: 14px; color: var(--text-dim); }
+
+    /* Footer */
+    footer {
+      padding: 40px 0;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-dim);
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .hero-stats { gap: 24px; }
+      .pipeline { padding: 24px; }
+      .philosophy { padding: 32px 24px; }
+      .flow { font-size: 11px; }
+      .flow .node { padding: 6px 10px; }
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="grain"></div>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-badge"><span class="dot"></span> Sprint 9 Complete — Live Paper Trading</div>
+  <h1>Primo<span>Greedy</span></h1>
+  <p>An autonomous AI agent that hunts, filters, debates, grades, and paper-trades micro-cap stocks across 4 global markets — every single day.</p>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="num">4</div><div class="label">Markets</div></div>
+    <div class="hero-stat"><div class="num">6</div><div class="label">LLM Fallback Chain</div></div>
+    <div class="hero-stat"><div class="num">3</div><div class="label">Debate Agents</div></div>
+    <div class="hero-stat"><div class="num">5</div><div class="label">Auto Evaluators</div></div>
+    <div class="hero-stat"><div class="num">24/7</div><div class="label">Catalyst Watch</div></div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section>
+  <div class="container">
+    <div class="section-label">Architecture</div>
+    <div class="section-title">Built on LangGraph</div>
+    <div class="section-desc">A multi-graph system with parallel fan-out, structured output, multi-agent debate, and live broker execution.</div>
+
+    <!-- Hunter Pipeline -->
+    <div class="pipeline">
+      <h3>Hunter Pipeline</h3>
+      <div class="sub">Daily cron — 4 regions in parallel via the Send API</div>
+      <div class="flow">
+        <span class="node active">START</span>
+        <span class="arrow">→</span>
+        <span class="node">Scout</span>
+        <span class="arrow">→</span>
+        <span class="node">Gatekeeper</span>
+        <span class="arrow">→</span>
+        <span class="node active">Analyst</span>
+        <span class="arrow">→</span>
+        <span class="node">Email</span>
+        <span class="arrow">→</span>
+        <span class="node active">END</span>
+      </div>
+      <div class="pipeline-features">
+        <div class="pipeline-feature">
+          <div class="icon">🔍</div>
+          <h4>Two-Pronged Discovery</h4>
+          <p>yFinance screener + Brave Search trending merged, scored, and ranked.</p>
+        </div>
+        <div class="pipeline-feature">
+          <div class="icon">🚧</div>
+          <h4>Quantitative Firewall</h4>
+          <p>$5M–$500M cap, &lt;$30 price, zombie filter. Command routing.</p>
+        </div>
+        <div class="pipeline-feature">
+          <div class="icon">🧠</div>
+          <h4>Structured Verdicts</h4>
+          <p>Pydantic InvestmentVerdict model with Kelly Criterion sizing.</p>
+        </div>
+        <div class="pipeline-feature">
+          <div class="icon">📧</div>
+          <h4>Team Dispatch</h4>
+          <p>HTML reports emailed to the full team via Resend API.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Debate Sub-graph -->
+    <div class="pipeline">
+      <h3>Investment Committee (Multi-Agent Debate)</h3>
+      <div class="sub">Three competing LLM personas for hallucination-resistant verdicts</div>
+      <div class="flow">
+        <span class="node">Pitcher</span>
+        <span class="arrow">→</span>
+        <span class="node">Skeptic</span>
+        <span class="arrow">→</span>
+        <span class="node active">Judge</span>
+        <span class="arrow">→</span>
+        <span class="node">Verdict</span>
+      </div>
+      <div class="pipeline-features">
+        <div class="pipeline-feature">
+          <div class="icon">📈</div>
+          <h4>The Pitcher (Gemma)</h4>
+          <p>Writes the strongest bullish Lynch Pitch using only provided data.</p>
+        </div>
+        <div class="pipeline-feature">
+          <div class="icon">🔥</div>
+          <h4>The Skeptic (Mistral)</h4>
+          <p>Aggressively challenges the bull case, flags fabricated claims.</p>
+        </div>
+        <div class="pipeline-feature">
+          <div class="icon">⚖️</div>
+          <h4>The Judge (Nemotron)</h4>
+          <p>Synthesizes the debate, applies Kelly sizing, issues the final verdict.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Parallel Orchestrator -->
+    <div class="pipeline">
+      <h3>Parallel Region Orchestrator</h3>
+      <div class="sub">Fan-out across all markets simultaneously</div>
+      <div class="flow">
+        <span class="node active">START</span>
+        <span class="arrow">→</span>
+        <span class="node">dispatch</span>
+        <span class="arrow">⇉</span>
+        <span class="node">USA</span>
+        <span class="node">UK</span>
+        <span class="node">Canada</span>
+        <span class="node">Australia</span>
+        <span class="arrow">⇉</span>
+        <span class="node active">END</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SAMPLE OUTPUT -->
+<section>
+  <div class="container">
+    <div class="section-label">Output</div>
+    <div class="section-title">What the Agent Produces</div>
+    <div class="section-desc">Every analysis follows the same battle-tested format — strict math, one catalyst, one way to lose, and a final call.</div>
+    <div class="verdict-box">
+      <span class="header">### THE QUANTITATIVE BASE (Graham / Asset Play)</span><br>
+      * Current Price: $17.80<br>
+      * Deep Value Asset Play Valuation (Book/Share): $10.89 per share<br>
+      * Margin of Safety: None — price is ~63% above the book-value floor.<br><br>
+      <span class="header">### THE LYNCH PITCH (Why I would own this)</span><br>
+      * <span class="bold">The Core Action:</span> Board committed $42.75M of personal capital to support buyback.<br>
+      * <span class="bold">The Catalyst:</span> $40M buyback + zero debt + $164M liquidity signals confidence.<br><br>
+      <span class="header">### THE MUNGER INVERT (How I could lose money)</span><br>
+      * <span class="bold">Structural Weakness:</span> Negative EPS of -3.79, negative EBITDA of -$32.97M.<br>
+      * <span class="bold">The Bear Evidence:</span> Failure to hit $180-$200M 2026 revenue target.<br><br>
+      <span class="header">### FINAL VERDICT</span><br>
+      <span class="watch">WATCH</span> — Upside dependent on fragile buyback catalyst.<br><br>
+      <span class="header">### POSITION SIZING (Kelly Criterion)</span><br>
+      <span class="bold">Recommended allocation: 5.0% of portfolio</span><br>
+      Based on historical win rate of 20% across 20 trades.
+    </div>
+  </div>
+</section>
+
+<!-- KEY MODULES -->
+<section>
+  <div class="container">
+    <div class="section-label">Modules</div>
+    <div class="section-title">The Engine Room</div>
+    <div class="section-desc">Every component is purpose-built, with VPS fallbacks, caching, and graceful degradation.</div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon cyan">🎯</div>
+        <h3>Screener &amp; Scoring</h3>
+        <p>yFinance-based micro-cap screener with quantitative candidate scoring. Brave Search adds trending/momentum signals. $5M–$500M market cap range.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon purple">📄</div>
+        <h3>SEC EDGAR Ground Truth</h3>
+        <p>Fetches 10-K/10-Q filings for US equities. Extracts MD&A and Risk Factors via BeautifulSoup. Injected into the analyst prompt as hard evidence.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon green">📊</div>
+        <h3>Kelly Criterion Sizing</h3>
+        <p>Computes optimal position size from historical win rate. Half-Kelly with verdict scaling. Per-verdict caps: STRONG BUY 25%, BUY 15%, WATCH 5%. 10-minute cache.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon yellow">🏦</div>
+        <h3>Alpaca Paper Trading</h3>
+        <p>Live broker integration for US equities. Submits market orders for BUY/STRONG BUY verdicts. Records order ID, fill price, and broker status to VPS.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon red">🚨</div>
+        <h3>Catalyst Polling Daemon</h3>
+        <p>VPS systemd timer polls every 15 min for volume spikes, price moves, and SEC Form 4 insider filings. Fires GitHub Actions repository_dispatch for instant analysis.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon cyan">🧪</div>
+        <h3>Grading Engine</h3>
+        <p>5 custom LangSmith evaluators: catalyst grounding, company identity, format check, verdict validity, Kelly math. LLM-as-a-Judge for hallucination detection.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon purple">💾</div>
+        <h3>VPS Data Layer</h3>
+        <p>FastAPI + DuckDB behind Tailscale. Seen-tickers with dynamic amnesia (14d AVOID, 30d BUY). Paper portfolio with P&L tracking. Agent run metrics.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon green">🔗</div>
+        <h3>LLM Fallback Chain</h3>
+        <p>6-model cascade via OpenRouter: Nemotron → Step → Trinity → Gemma → Llama → Mistral. Auto-retry on 429s with exponential backoff.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SPRINT TIMELINE -->
+<section>
+  <div class="container">
+    <div class="section-label">Evolution</div>
+    <div class="section-title">Sprint Timeline</div>
+    <div class="section-desc">From basic screening to autonomous paper trading in 9 sprints.</div>
+    <div class="timeline">
+
+      <div class="timeline-item done">
+        <div class="sprint-tag s7">Sprint 1–7</div>
+        <h3>Foundation</h3>
+        <p>Core LangGraph pipeline, yFinance integration, Brave Search discovery, Finnhub fundamentals, Resend email dispatch, Chainlit UI, and GitHub Actions cron.</p>
+      </div>
+
+      <div class="timeline-item done">
+        <div class="sprint-tag s8">Sprint 8 — Ground Truth &amp; Sizing</div>
+        <h3>SEC EDGAR + Kelly Criterion</h3>
+        <ul>
+          <li>Epic 1–2: LangGraph modernization — <code>Command</code> routing, <code>Send</code> parallel fan-out, <code>RetryPolicy</code>, <code>InMemorySaver</code></li>
+          <li>Epic 3: SEC EDGAR 10-K/10-Q filing fetcher with MD&A and Risk Factors extraction</li>
+          <li>Epic 4: Kelly Criterion position sizing with half-Kelly, verdict scaling, and trade history</li>
+          <li>VPS deployment: FastAPI + DuckDB data API behind Tailscale</li>
+          <li>Ticker extraction hardening: 100+ noise words, uppercase-only matching</li>
+        </ul>
+      </div>
+
+      <div class="timeline-item done">
+        <div class="sprint-tag s9">Sprint 9 — Execution &amp; Quality Control</div>
+        <h3>Debate + Broker + Evaluators + Catalyst</h3>
+        <ul>
+          <li><strong>Epic 1 — Grading Engine:</strong> 5 custom LangSmith evaluators, golden dataset builder, evaluation runner</li>
+          <li><strong>Epic 2 — Live Broker:</strong> Alpaca Paper Trading integration with order routing, fill tracking, and VPS sync</li>
+          <li><strong>Epic 3 — Sniper Node:</strong> Catalyst polling daemon on VPS, Finnhub volume/price/insider triggers, <code>repository_dispatch</code> wake-up</li>
+          <li><strong>Epic 4 — Investment Committee:</strong> Multi-agent debate subgraph (Pitcher → Skeptic → Judge) with configurable models</li>
+          <li><strong>Optimizations:</strong> Widened universe to $5M–$500M, dynamic amnesia (14d/30d), per-verdict Kelly caps, 65k token headroom</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- TECH STACK -->
+<section>
+  <div class="container">
+    <div class="section-label">Stack</div>
+    <div class="section-title">Technology</div>
+    <div class="section-desc">Built with production-grade frameworks and APIs.</div>
+    <div class="tech-grid">
+      <div class="tech-item"><span class="t-icon">🦜</span> LangGraph</div>
+      <div class="tech-item"><span class="t-icon">🔗</span> LangChain</div>
+      <div class="tech-item"><span class="t-icon">🔬</span> LangSmith</div>
+      <div class="tech-item"><span class="t-icon">🤖</span> OpenRouter</div>
+      <div class="tech-item"><span class="t-icon">📊</span> yFinance</div>
+      <div class="tech-item"><span class="t-icon">📡</span> Finnhub</div>
+      <div class="tech-item"><span class="t-icon">🔍</span> Brave Search</div>
+      <div class="tech-item"><span class="t-icon">📄</span> SEC EDGAR</div>
+      <div class="tech-item"><span class="t-icon">🏦</span> Alpaca Markets</div>
+      <div class="tech-item"><span class="t-icon">⚡</span> FastAPI</div>
+      <div class="tech-item"><span class="t-icon">🦆</span> DuckDB</div>
+      <div class="tech-item"><span class="t-icon">🐍</span> Python 3.11</div>
+      <div class="tech-item"><span class="t-icon">🔒</span> Tailscale</div>
+      <div class="tech-item"><span class="t-icon">📧</span> Resend</div>
+      <div class="tech-item"><span class="t-icon">🔄</span> GitHub Actions</div>
+      <div class="tech-item"><span class="t-icon">💬</span> Chainlit</div>
+    </div>
+  </div>
+</section>
+
+<!-- LANGGRAPH FEATURES -->
+<section>
+  <div class="container">
+    <div class="section-label">LangGraph</div>
+    <div class="section-title">Framework Features Used</div>
+    <div class="section-desc">Following modern LangGraph best practices throughout.</div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon cyan">📝</div>
+        <h3>Partial State Updates</h3>
+        <p>Nodes return only changed keys. Annotated reducers on candidates and scores with <code>operator.add</code>.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon purple">🔀</div>
+        <h3>Command Pattern</h3>
+        <p>Gatekeeper combines state update + routing in a single return. Routes to analyst, scout, or email.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon green">⚡</div>
+        <h3>Send API</h3>
+        <p>Parallel fan-out across 4 market regions. Each region runs the full pipeline independently.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon yellow">💾</div>
+        <h3>Checkpointing</h3>
+        <p>InMemorySaver with thread_id for state persistence and tracing correlation.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon red">🔄</div>
+        <h3>RetryPolicy</h3>
+        <p>max_attempts=3, initial_interval=2.0 on all nodes. Handles transient API failures.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon cyan">🏗️</div>
+        <h3>Subgraphs</h3>
+        <p>Multi-agent debate as a nested LangGraph subgraph. Composable and independently testable.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PHILOSOPHY -->
+<section>
+  <div class="container">
+    <div class="philosophy">
+      <div class="section-label" style="margin-bottom: 24px;">Philosophy</div>
+      <blockquote>"PrimoGreedy does not predict the future. It finds the math, finds the catalyst, finds the catch — and says AVOID far more often than it says BUY."</blockquote>
+      <div class="attr">Benjamin Graham's math &nbsp;·&nbsp; Peter Lynch's story &nbsp;·&nbsp; Charlie Munger's inversion</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    PrimoGreedy &copy; 2026 &nbsp;·&nbsp;
+    <a href="https://github.com/CiscoPonce/primogreedy" target="_blank">GitHub</a> &nbsp;·&nbsp;
+    Built with LangGraph + LangChain + LangSmith
+  </div>
+</footer>
+
+</body>
+</html>
