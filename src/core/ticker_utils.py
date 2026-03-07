@@ -40,6 +40,8 @@ NOISE_WORDS = frozenset({
     # Financial acronyms / index names that aren't tradeable tickers
     "ROCE", "FTSE", "DJIA", "EBIT", "WACC", "CAGR", "ROIC", "REIT",
     "SPAC", "NBER", "OPEC", "MSCI", "EMEA", "APAC", "OECD", "FIFO",
+    "FINRA", "SIPC", "FDIC", "LISA", "ISA", "ATM", "AMA", "FDA",
+    "PHNX", "IPG", "GAAP", "IFRS", "FASB", "IASB", "PCAOB",
 })
 
 _MAX_TICKER_LEN = 8  # longest valid ticker with suffix: e.g. CHE.UN.TO
