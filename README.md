@@ -10,13 +10,13 @@ app_port: 7860
 
 # PrimoGreedy Agent
 
-**PrimoGreedy** is an automated, AI-driven financial analysis agent designed to hunt, filter, and evaluate Micro-Cap and Small-Cap stocks. It acts as a ruthless "Logic Firewall," aggressively rejecting high-debt, cash-burning, and overvalued companies before deploying a ReAct (Reasoning and Acting) LLM to write highly structured fundamental investment memos.
+**PrimoGreedy** is an automated, AI-driven financial analysis agent designed to hunt, filter, and evaluate Micro-Cap and Small-Cap stocks. It acts as a ruthless "Logic Firewall," aggressively rejecting high-debt, cash-burning, and overvalued companies before deploying a multi-agent LLM pipeline to write highly structured fundamental investment memos — and optionally execute paper trades via Alpaca.
 
 ---
 
 ## Core Architecture (The LangGraph Engine)
 
-The system is built on **LangGraph** following modern best practices (partial state updates, `Command` routing, `Send` parallel fan-out, checkpointing, and `RetryPolicy`).
+The system is built on **LangGraph** following modern best practices (partial state updates, `Command` routing, `Send` parallel fan-out, checkpointing, `RetryPolicy`, and multi-agent subgraphs).
 
 ### Hunter Pipeline (`src/agent.py` / `src/whale_hunter.py`)
 
@@ -32,7 +32,11 @@ START --> initial_routing --> [chat] --> END
    - Share Price: under $30.00
    - Zombie Filter: rejects unprofitable companies with < 6 months cash runway
    - Routes directly to `analyst` (PASS / retries exhausted) or back to `scout` (FAIL) via `Command`.
-3. **Analyst Node** — Senior Broker analysis powered by OpenRouter (5-model fallback chain). Calls Finnhub tools for deep fundamentals and insider sentiment. Fetches **SEC EDGAR** 10-K/10-Q filings for US equities (MD&A + Risk Factors ground truth). Returns structured `InvestmentVerdict` (Pydantic model) with guaranteed `STRONG BUY | BUY | WATCH | AVOID` verdicts plus **Kelly Criterion position sizing**, falling back to plain LLM output.
+3. **Analyst Node** — Two modes controlled by `USE_DEBATE` env var:
+   - **Single-LLM** (default): Senior Broker analysis via OpenRouter (6-model fallback chain) with structured `InvestmentVerdict` output.
+   - **Multi-Agent Debate** (`USE_DEBATE=true`): Three-agent Investment Committee subgraph (Pitcher → Skeptic → Judge) that produces a hallucination-resistant verdict.
+
+   Both modes fetch **SEC EDGAR** 10-K/10-Q filings (US equities), call Finnhub tools for deep fundamentals, and compute **Kelly Criterion position sizing**.
 
 ### Workflow Pipeline (`src/workflows/workflow.py`)
 
@@ -41,6 +45,20 @@ START --> [data_collection] --> [technical_analysis] --> [news_intelligence] -->
 ```
 
 A linear 4-node pipeline for deep single-ticker analysis (used by `main.py` CLI).
+
+### Multi-Agent Debate (`src/agents/debate.py`)
+
+When `USE_DEBATE=true`, the analyst node runs a 3-agent LangGraph subgraph:
+
+```
+START --> [pitcher (Gemma)] --> [skeptic (Mistral)] --> [judge (Nemotron)] --> END
+```
+
+1. **The Pitcher** — Writes the strongest bullish thesis using only provided data.
+2. **The Skeptic** — Challenges the bull case, flagging any fabricated claims.
+3. **The Judge** — Synthesises the debate into a structured `InvestmentVerdict`, downgrading if fabrications were found.
+
+Models are configurable via `DEBATE_PITCHER_MODEL`, `DEBATE_SKEPTIC_MODEL`, `DEBATE_JUDGE_MODEL` env vars.
 
 ### Parallel Region Orchestrator (`src/whale_hunter.py`)
 
@@ -54,6 +72,8 @@ START --> dispatch_regions --> [hunt_region: USA]       \
 ```
 
 Each `hunt_region` invokes the full per-region subgraph (scout -> gatekeeper -> analyst -> email).
+
+Supports **catalyst-triggered single-ticker mode** via `CATALYST_TICKER` env var (used by `repository_dispatch` from the VPS polling daemon).
 
 ---
 
@@ -69,6 +89,7 @@ Each `hunt_region` invokes the full per-region subgraph (scout -> gatekeeper -> 
 | `RetryPolicy` | All nodes | `max_attempts=3, initial_interval=2.0` for transient errors |
 | `recursion_limit` | All `invoke()` calls | Set to 30 to prevent infinite loops |
 | Structured output | Analyst nodes | `with_structured_output(InvestmentVerdict)` for validated verdicts |
+| Subgraph | `src/agents/debate.py` | Pitcher/Skeptic/Judge multi-agent debate as nested graph |
 | `@tool` decorator | `sec_edgar.py`, `finance_tools.py` | LangChain tool pattern for API integrations |
 | `START` / `END` | All graphs | Modern entry-point API (no deprecated `set_entry_point`) |
 
@@ -87,13 +108,40 @@ A Chainlit-powered chat interface.
 ### The Morning Cron (`src/whale_hunter.py`)
 Headless agent running as a **GitHub Action** daily cron. Hunts all 4 regions in parallel, evaluates candidates through the full pipeline, and emails HTML reports via Resend.
 
+### Alpaca Paper Trading (`src/broker/alpaca.py`)
+Optional **Alpaca Markets** integration for live paper trading of US equities:
+- Automatically submits market orders for **BUY / STRONG BUY** verdicts on US tickers
+- Calculates share quantity from Kelly position sizing and account equity
+- Safety limits: minimum $1 order, maximum 25% of equity per position
+- Records `order_id`, `fill_price`, and `broker_status` to VPS
+- Dry-run mode when `ALPACA_ENABLED` is not set (logs but doesn't submit)
+
 ### VPS Data Layer (`vps/`)
 Optional **FastAPI + DuckDB** backend deployed on a VPS (behind Tailscale) that replaces local JSON files for persistence:
 - `seen_tickers` — Prevents re-analysing the same ticker within 30 days
-- `paper_portfolio` — Records all BUY/STRONG BUY/WATCH paper trades with Kelly position sizing
+- `paper_portfolio` — Records all paper trades with Kelly sizing, Alpaca order IDs, and fill prices
 - `agent_runs` — Operational metrics for LangSmith correlation
 
 The agent (`src/core/memory.py`, `src/portfolio_tracker.py`) auto-detects the VPS via `VPS_API_URL` env var and falls back to local JSON files when unavailable.
+
+### Catalyst Polling Daemon (`vps/catalyst_poll.py`)
+VPS-based systemd timer that polls every 15 minutes during US market hours for intraday triggers:
+- **Volume spike** — Current volume > 3x average daily volume
+- **Price move** — Intraday move > 10%
+- **Insider filing** — New SEC Form 4 purchase for a tracked ticker
+
+When triggered, fires a GitHub Actions `repository_dispatch` event to run the pipeline for that specific ticker.
+
+### Grading Engine (`scripts/`)
+Automated quality assurance via LangSmith Evaluators:
+- `scripts/build_golden_dataset.py` — Curates 50 representative traces into a LangSmith Dataset
+- `scripts/evaluators.py` — 5 custom evaluators:
+  - **Catalyst Grounding** (LLM-as-a-Judge) — Scores whether claims are backed by data
+  - **Company Identity** (LLM-as-a-Judge) — Catches "name-trap" hallucinations
+  - **Format** — Validates headers, no duplicates, Kelly present for BUY
+  - **Verdict Validity** — Ensures verdict is one of the 4 valid values
+  - **Kelly Math** — Checks allocation is within [1%, 25%] bounds
+- `scripts/run_evals.py` — Runs all evaluators against the golden dataset
 
 ### SEC EDGAR Ground Truth (`src/sec_edgar.py`)
 Fetches the most recent 10-K or 10-Q filing from SEC EDGAR for US equities and extracts two investment-critical sections:
@@ -135,7 +183,7 @@ pip install -r requirements.txt
 
 ### 2. Configuration (`.env`)
 ```env
-OPENROUTER_API_KEY=your_key       # LLM Inference (5-model fallback chain)
+OPENROUTER_API_KEY=your_key       # LLM Inference (6-model fallback chain)
 FINNHUB_API_KEY=your_key          # Deep Fundamentals & Insider Data
 BRAVE_API_KEY=your_key            # Web Search
 RESEND_API_KEY_CISCO=your_key     # Email Reporting (Cron only)
@@ -143,6 +191,19 @@ RESEND_API_KEY_CISCO=your_key     # Email Reporting (Cron only)
 # Optional: VPS Data API
 VPS_API_URL=http://your-vps:8080
 VPS_API_KEY=your_vps_key
+
+# Optional: Alpaca Paper Trading (US equities only)
+ALPACA_API_KEY=your_key
+ALPACA_SECRET_KEY=your_secret
+ALPACA_ENABLED=true
+
+# Optional: Multi-Agent Debate
+USE_DEBATE=true                   # Enable pitcher/skeptic/judge pipeline
+
+# Optional: LangSmith Observability
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your_key
+LANGCHAIN_PROJECT=primogreedy
 ```
 
 ### 3. Launching the UI
@@ -160,6 +221,12 @@ python3 main.py
 bash vps/deploy.sh
 ```
 
+### 6. Running Evaluations (optional)
+```bash
+python scripts/build_golden_dataset.py   # Build the golden dataset from LangSmith
+python scripts/run_evals.py              # Run all evaluators
+```
+
 ---
 
 ## Project Structure
@@ -172,25 +239,28 @@ primogreedy/
 ├── src/
 │   ├── agent.py                    # Interactive Chainlit pipeline (scout/gatekeeper/analyst)
 │   ├── whale_hunter.py             # Daily cron pipeline + parallel Send orchestrator
-│   ├── llm.py                      # OpenRouter LLM with 5-model fallback chain
+│   ├── llm.py                      # OpenRouter LLM with 6-model fallback + structured output
 │   ├── sec_edgar.py                # SEC EDGAR 10-K/10-Q filing fetcher + parser (@tool)
 │   ├── finance_tools.py            # Finnhub tools (@tool decorated)
-│   ├── portfolio_tracker.py        # Paper trade recording + evaluation (with position_size)
+│   ├── portfolio_tracker.py        # Paper trade recording + Alpaca execution
 │   ├── email_utils.py              # Resend email dispatch
 │   ├── core/
-│   │   ├── state.py                # AgentState (TypedDict with Annotated reducers)
+│   │   ├── state.py                # AgentState (TypedDict with Annotated reducers + debate fields)
 │   │   ├── memory.py               # Seen-tickers ledger (VPS or local JSON)
-│   │   ├── search.py               # Brave Search wrapper
-│   │   ├── ticker_utils.py         # Ticker extraction, suffix resolution
+│   │   ├── search.py               # Brave Search wrapper (with retry/backoff)
+│   │   ├── ticker_utils.py         # Ticker extraction, suffix resolution, noise filtering
 │   │   └── logger.py               # Logging config
 │   ├── models/
-│   │   ├── verdict.py              # InvestmentVerdict Pydantic model (with Kelly fields)
-│   │   └── kelly.py                # Kelly Criterion position sizing calculator
-│   ├── agents/                     # Workflow pipeline nodes
+│   │   ├── verdict.py              # InvestmentVerdict Pydantic model (with header-stripping)
+│   │   └── kelly.py                # Kelly Criterion position sizing (with 10-min cache)
+│   ├── agents/
+│   │   ├── debate.py               # Multi-agent pitcher/skeptic/judge subgraph
 │   │   ├── data_collection_agent.py
 │   │   ├── technical_analysis_agent.py
 │   │   ├── news_intelligence_agent.py
 │   │   └── portfolio_manager_agent.py
+│   ├── broker/
+│   │   └── alpaca.py               # Alpaca Paper Trading order router + execution
 │   ├── workflows/
 │   │   ├── workflow.py             # 4-node linear workflow graph
 │   │   └── state.py                # Workflow-specific AgentState
@@ -200,13 +270,18 @@ primogreedy/
 │   │   └── insider_feed.py         # SEC EDGAR / Finnhub insider data
 │   └── prompts/
 │       └── senior_broker.py        # LangSmith Hub prompt template
+├── scripts/
+│   ├── build_golden_dataset.py     # LangSmith golden dataset builder
+│   ├── evaluators.py               # Custom LangSmith evaluators (5 scorers)
+│   └── run_evals.py                # Evaluation runner
 ├── vps/
-│   ├── api.py                      # FastAPI + DuckDB data API
+│   ├── api.py                      # FastAPI + DuckDB data API (with broker fields)
+│   ├── catalyst_poll.py            # Intraday catalyst polling daemon
 │   ├── schema.sql                  # DuckDB table definitions
 │   ├── deploy.sh                   # VPS deployment script
 │   └── requirements.txt            # VPS-specific dependencies
 └── .github/workflows/
-    └── hunter.yml                  # Daily cron GitHub Action
+    └── hunter.yml                  # Daily cron + catalyst dispatch GitHub Action
 ```
 
 ---
