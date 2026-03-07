@@ -41,8 +41,8 @@ logger = get_logger(__name__)
 brave_market_search = brave_search
 
 # --- CONFIGURATION ---
-MAX_MARKET_CAP = 300_000_000
-MIN_MARKET_CAP = 10_000_000
+MAX_MARKET_CAP = 500_000_000
+MIN_MARKET_CAP = 5_000_000
 MAX_PRICE_PER_SHARE = 30.00
 MAX_RETRIES = 1
 

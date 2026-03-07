@@ -46,6 +46,8 @@ NOISE_WORDS = frozenset({
     "SAFE", "IDEA", "PLAN", "RULE", "STEP", "PLAY", "OPEN",
     "PART", "NOTE", "LINE", "READ", "FILL", "SIZE", "WIDE",
     "SIGN", "RISE", "LEAD", "PUSH", "PULL", "DROP", "JUMP",
+    "AEDT", "AEST", "BEST", "FAST", "EVER", "FORM", "SENT",
+    "GROW", "MARK", "PURE", "REAL", "SOFT", "TALK", "VOTE",
 })
 
 _MAX_TICKER_LEN = 8  # longest valid ticker with suffix: e.g. CHE.UN.TO

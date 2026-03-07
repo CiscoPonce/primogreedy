@@ -46,8 +46,8 @@ from src.discovery.insider_feed import get_insider_buys
 logger = get_logger(__name__)
 
 # --- CONFIGURATION ---
-MAX_MARKET_CAP = 300_000_000
-MIN_MARKET_CAP = 10_000_000
+MAX_MARKET_CAP = 500_000_000
+MIN_MARKET_CAP = 5_000_000
 MAX_PRICE_PER_SHARE = 30.00
 MAX_RETRIES = 3
 HARD_TIMEOUT_SECONDS = 3000  # 50 min to match GitHub Actions

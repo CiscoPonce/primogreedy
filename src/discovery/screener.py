@@ -12,8 +12,8 @@ from src.core.ticker_utils import normalize_price
 
 logger = get_logger(__name__)
 
-MAX_MARKET_CAP = 300_000_000
-MIN_MARKET_CAP = 10_000_000
+MAX_MARKET_CAP = 500_000_000
+MIN_MARKET_CAP = 5_000_000
 MAX_PRICE = 30.00
 
 # Pre-curated universe of US micro-cap-heavy indices / lists.

@@ -28,7 +28,7 @@ START --> initial_routing --> [chat] --> END
 
 1. **Scout Node** — Discovers candidates via yFinance screener + Brave Search trending, scores and ranks them, and pops the best unseen ticker.
 2. **Gatekeeper Node** — Strict quantitative firewall using the `Command` pattern for routing:
-   - Market Cap: $10M -- $300M
+   - Market Cap: $5M -- $500M
    - Share Price: under $30.00
    - Zombie Filter: rejects unprofitable companies with < 6 months cash runway
    - Routes directly to `analyst` (PASS / retries exhausted) or back to `scout` (FAIL) via `Command`.
@@ -118,7 +118,7 @@ Optional **Alpaca Markets** integration for live paper trading of US equities:
 
 ### VPS Data Layer (`vps/`)
 Optional **FastAPI + DuckDB** backend deployed on a VPS (behind Tailscale) that replaces local JSON files for persistence:
-- `seen_tickers` — Prevents re-analysing the same ticker within 30 days
+- `seen_tickers` — Prevents re-analysing the same ticker (30 days for BUY/STRONG BUY, 14 days for AVOID/WATCH to allow re-evaluation)
 - `paper_portfolio` — Records all paper trades with Kelly sizing, Alpaca order IDs, and fill prices
 - `agent_runs` — Operational metrics for LangSmith correlation
 

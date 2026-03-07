@@ -23,7 +23,8 @@ load_dotenv()
 
 DB_PATH = os.getenv("DUCKDB_PATH", "/home/ubuntu/primogreedy/data.duckdb")
 API_KEY = os.getenv("VPS_API_KEY", "5ZhJ_T2gTTQp-LAJKdWMvKJgQSqFU8MSfFDAi04tNr0")
-MEMORY_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+MEMORY_TTL_LONG = 30 * 24 * 60 * 60   # 30 days — BUY / STRONG BUY
+MEMORY_TTL_SHORT = 14 * 24 * 60 * 60  # 14 days — AVOID / WATCH / unknown
 
 
 # ---------------------------------------------------------------------------
@@ -144,15 +145,36 @@ def health():
 
 @app.get("/seen-tickers")
 def get_seen_tickers(x_api_key: str = Header(...)):
+    """Return seen tickers with verdict-aware TTL.
+
+    BUY / STRONG BUY verdicts stay locked for 30 days.
+    AVOID / WATCH / unknown verdicts expire after 14 days so the
+    agent can re-evaluate tickers whose fundamentals may have changed.
+    """
     verify_key(x_api_key)
     con = get_db()
-    cutoff = time.time() - MEMORY_TTL_SECONDS
-    cutoff_ts = datetime.fromtimestamp(cutoff, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    rows = con.execute(
-        "SELECT ticker, epoch(seen_at) as ts FROM seen_tickers WHERE seen_at >= ?",
-        [cutoff_ts],
-    ).fetchall()
+    long_cutoff = datetime.fromtimestamp(
+        time.time() - MEMORY_TTL_LONG, tz=timezone.utc
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    short_cutoff = datetime.fromtimestamp(
+        time.time() - MEMORY_TTL_SHORT, tz=timezone.utc
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    rows = con.execute("""
+        WITH latest_verdicts AS (
+            SELECT ticker, verdict,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM paper_portfolio
+        )
+        SELECT st.ticker, epoch(st.seen_at) AS ts
+        FROM seen_tickers st
+        LEFT JOIN latest_verdicts lv ON st.ticker = lv.ticker AND lv.rn = 1
+        WHERE CASE
+            WHEN lv.verdict IN ('BUY', 'STRONG BUY') THEN st.seen_at >= ?
+            ELSE st.seen_at >= ?
+        END
+    """, [long_cutoff, short_cutoff]).fetchall()
     con.close()
 
     return {row[0]: row[1] for row in rows}
