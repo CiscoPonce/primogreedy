@@ -53,5 +53,5 @@ resend
 yfinance
 matplotlib
 backtrader
-alpaca-trade-api>=3.0
 beautifulsoup4
+# alpaca-trade-api>=3.0  — optional: install manually when ALPACA_ENABLED=true
