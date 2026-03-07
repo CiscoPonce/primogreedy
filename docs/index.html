@@ -324,15 +324,16 @@
 
 <!-- HERO -->
 <section class="hero">
-  <div class="hero-badge"><span class="dot"></span> Sprint 9 Complete — Live Paper Trading</div>
+  <div class="hero-badge"><span class="dot"></span> Sprint 9+ — Live Dashboard &amp; Active Quality Control</div>
   <h1>Primo<span>Greedy</span></h1>
   <p>An autonomous AI agent that hunts, filters, debates, grades, and paper-trades micro-cap stocks across 4 global markets — every single day.</p>
   <div class="hero-stats">
     <div class="hero-stat"><div class="num">4</div><div class="label">Markets</div></div>
     <div class="hero-stat"><div class="num">6</div><div class="label">LLM Fallback Chain</div></div>
     <div class="hero-stat"><div class="num">3</div><div class="label">Debate Agents</div></div>
-    <div class="hero-stat"><div class="num">5</div><div class="label">Auto Evaluators</div></div>
+    <div class="hero-stat"><div class="num">7</div><div class="label">Auto Evaluators</div></div>
     <div class="hero-stat"><div class="num">24/7</div><div class="label">Catalyst Watch</div></div>
+    <div class="hero-stat"><div class="num">Live</div><div class="label">Dashboard</div></div>
   </div>
 </section>
 
@@ -496,13 +497,18 @@
       </div>
       <div class="card">
         <div class="card-icon cyan">🧪</div>
-        <h3>Grading Engine</h3>
-        <p>5 custom LangSmith evaluators: catalyst grounding, company identity, format check, verdict validity, Kelly math. LLM-as-a-Judge for hallucination detection.</p>
+        <h3>Grading Engine (Online + Offline)</h3>
+        <p>7 evaluators across two tiers. Online: format_score and verdict_validity run inline during every cron and post LangSmith feedback. Offline: LLM-as-a-Judge hallucination catchers. Annotation queue auto-tags edge cases for human review.</p>
       </div>
       <div class="card">
         <div class="card-icon purple">💾</div>
-        <h3>VPS Data Layer</h3>
-        <p>FastAPI + DuckDB behind Tailscale. Seen-tickers with dynamic amnesia (14d AVOID, 30d BUY). Paper portfolio with P&L tracking. Agent run metrics.</p>
+        <h3>VPS Data Layer + Live Dashboard</h3>
+        <p>FastAPI + DuckDB behind Tailscale. Seen-tickers with dynamic amnesia (14d AVOID, 30d BUY). Paper portfolio with P&L tracking. Chart.js dashboard with summary cards, verdict donut, Kelly bar chart, and sortable trade table.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon yellow">🔬</div>
+        <h3>Prompt A/B Testing</h3>
+        <p>LangSmith Hub integration with PROMPT_VERSION env var to pin prompts to specific commits. Run parallel crons with different prompt versions and compare results in LangSmith Experiments.</p>
       </div>
       <div class="card">
         <div class="card-icon green">🔗</div>
@@ -548,6 +554,18 @@
           <li><strong>Epic 3 — Sniper Node:</strong> Catalyst polling daemon on VPS, Finnhub volume/price/insider triggers, <code>repository_dispatch</code> wake-up</li>
           <li><strong>Epic 4 — Investment Committee:</strong> Multi-agent debate subgraph (Pitcher → Skeptic → Judge) with configurable models</li>
           <li><strong>Optimizations:</strong> Widened universe to $5M–$500M, dynamic amnesia (14d/30d), per-verdict Kelly caps, 65k token headroom</li>
+        </ul>
+      </div>
+
+      <div class="timeline-item done">
+        <div class="sprint-tag s9">Sprint 9+ — Dashboard &amp; Active Quality Control</div>
+        <h3>Live Dashboard + Online Evaluators + Prompt Versioning</h3>
+        <ul>
+          <li><strong>VPS Dashboard:</strong> Chart.js portfolio dashboard served from FastAPI — summary cards, verdict donut, Kelly sizing bar chart, sortable trade table, seen-ticker feed. Auto-refresh 5 min</li>
+          <li><strong>Online Evaluators:</strong> <code>format_score</code> and <code>verdict_validity</code> run inline after every verdict, posting feedback directly to LangSmith runs — zero extra LLM cost</li>
+          <li><strong>Annotation Queue:</strong> WATCH/AVOID/fallback verdicts auto-tagged with <code>needs_review</code> in LangSmith for team review</li>
+          <li><strong>Prompt A/B Testing:</strong> <code>PROMPT_VERSION</code> env var pins LangSmith Hub prompts to specific commits for controlled experiments</li>
+          <li><strong>New endpoint:</strong> <code>GET /portfolio/summary</code> for lightweight stats without yFinance calls</li>
         </ul>
       </div>
 

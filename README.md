@@ -121,6 +121,8 @@ Optional **FastAPI + DuckDB** backend deployed on a VPS (behind Tailscale) that 
 - `seen_tickers` — Prevents re-analysing the same ticker (30 days for BUY/STRONG BUY, 14 days for AVOID/WATCH to allow re-evaluation)
 - `paper_portfolio` — Records all paper trades with Kelly sizing, Alpaca order IDs, and fill prices
 - `agent_runs` — Operational metrics for LangSmith correlation
+- **Live Dashboard** (`GET /dashboard`) — Chart.js-powered portfolio dashboard with summary cards, verdict distribution donut, Kelly sizing bar chart, sortable trade table, and seen-ticker feed. Auto-refreshes every 5 minutes. Dark theme.
+- `GET /portfolio/summary` — Lightweight aggregated stats endpoint (no yFinance calls)
 
 The agent (`src/core/memory.py`, `src/portfolio_tracker.py`) auto-detects the VPS via `VPS_API_URL` env var and falls back to local JSON files when unavailable.
 
@@ -132,8 +134,10 @@ VPS-based systemd timer that polls every 15 minutes during US market hours for i
 
 When triggered, fires a GitHub Actions `repository_dispatch` event to run the pipeline for that specific ticker.
 
-### Grading Engine (`scripts/`)
-Automated quality assurance via LangSmith Evaluators:
+### Grading Engine (`scripts/` + `src/core/online_eval.py`)
+Automated quality assurance via LangSmith Evaluators, split into **offline** and **online** tiers:
+
+**Offline Evaluators** (run on demand against golden dataset):
 - `scripts/build_golden_dataset.py` — Curates 50 representative traces into a LangSmith Dataset
 - `scripts/evaluators.py` — 5 custom evaluators:
   - **Catalyst Grounding** (LLM-as-a-Judge) — Scores whether claims are backed by data
@@ -142,6 +146,15 @@ Automated quality assurance via LangSmith Evaluators:
   - **Verdict Validity** — Ensures verdict is one of the 4 valid values
   - **Kelly Math** — Checks allocation is within [1%, 25%] bounds
 - `scripts/run_evals.py` — Runs all evaluators against the golden dataset
+
+**Online Evaluators** (run inline during every cron):
+- `src/core/online_eval.py` — After each analyst verdict, the cheap evaluators (`format_score`, `verdict_validity_score`) run automatically and post results as **LangSmith feedback** on the run. Zero extra LLM cost.
+
+**Annotation Queue**:
+- WATCH, AVOID, and fallback-path verdicts are automatically tagged with `needs_review=true` in LangSmith metadata, so the team can filter and review edge cases in the LangSmith UI.
+
+**Prompt A/B Testing**:
+- `src/prompts/senior_broker.py` supports a `PROMPT_VERSION` env var to pin to a specific LangSmith Hub commit. Deploy two cron runs with different versions and compare results in LangSmith Experiments.
 
 ### SEC EDGAR Ground Truth (`src/sec_edgar.py`)
 Fetches the most recent 10-K or 10-Q filing from SEC EDGAR for US equities and extracts two investment-critical sections:
@@ -204,6 +217,9 @@ USE_DEBATE=true                   # Enable pitcher/skeptic/judge pipeline
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY=your_key
 LANGCHAIN_PROJECT=primogreedy
+
+# Optional: Prompt A/B Testing
+PROMPT_VERSION=latest             # Pin to a specific Hub commit hash for A/B tests
 ```
 
 ### 3. Launching the UI
@@ -249,6 +265,7 @@ primogreedy/
 │   │   ├── memory.py               # Seen-tickers ledger (VPS or local JSON)
 │   │   ├── search.py               # Brave Search wrapper (with retry/backoff)
 │   │   ├── ticker_utils.py         # Ticker extraction, suffix resolution, noise filtering
+│   │   ├── online_eval.py          # Inline LangSmith evaluators + annotation queue
 │   │   └── logger.py               # Logging config
 │   ├── models/
 │   │   ├── verdict.py              # InvestmentVerdict Pydantic model (with header-stripping)
@@ -275,7 +292,7 @@ primogreedy/
 │   ├── evaluators.py               # Custom LangSmith evaluators (5 scorers)
 │   └── run_evals.py                # Evaluation runner
 ├── vps/
-│   ├── api.py                      # FastAPI + DuckDB data API (with broker fields)
+│   ├── api.py                      # FastAPI + DuckDB data API (with broker fields + dashboard)
 │   ├── catalyst_poll.py            # Intraday catalyst polling daemon
 │   ├── schema.sql                  # DuckDB table definitions
 │   ├── deploy.sh                   # VPS deployment script
