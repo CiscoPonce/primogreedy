@@ -8,6 +8,7 @@ Usage:
 """
 
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ import duckdb
 import yfinance as yf
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -315,3 +317,319 @@ def evaluate_portfolio(x_api_key: str = Header(...)):
         "avg_return": round(avg_roi, 2),
         "trades": trades,
     }
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Summary (lightweight, no yFinance calls)
+# ---------------------------------------------------------------------------
+
+@app.get("/portfolio/summary")
+def portfolio_summary(x_api_key: str = Header(...)):
+    """Aggregated portfolio stats without live price lookups."""
+    verify_key(x_api_key)
+    con = get_db()
+
+    trades = con.execute(
+        """SELECT ticker, entry_price, date, verdict, source,
+                  position_size, order_id, fill_price, broker_status
+           FROM paper_portfolio ORDER BY date DESC"""
+    ).fetchall()
+
+    seen_count = con.execute("SELECT COUNT(*) FROM seen_tickers").fetchone()[0]
+
+    runs = con.execute(
+        """SELECT id, ticker, timestamp, status, region
+           FROM agent_runs ORDER BY timestamp DESC LIMIT 20"""
+    ).fetchall()
+
+    con.close()
+
+    by_verdict: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    recent_trades = []
+
+    for r in trades:
+        v = _extract_verdict_label(r[3])
+        by_verdict[v] = by_verdict.get(v, 0) + 1
+        src = r[4] or "unknown"
+        by_source[src] = by_source.get(src, 0) + 1
+
+        trade_obj = {
+            "ticker": r[0], "entry_price": r[1], "date": str(r[2]),
+            "verdict": v, "source": src,
+            "position_size": r[5], "order_id": r[6],
+            "fill_price": r[7], "broker_status": r[8] or "none",
+        }
+        if len(recent_trades) < 15:
+            recent_trades.append(trade_obj)
+
+    recent_runs = [
+        {"id": r[0], "ticker": r[1], "timestamp": str(r[2]),
+         "status": r[3], "region": r[4]}
+        for r in runs
+    ]
+
+    return {
+        "total_trades": len(trades),
+        "by_verdict": by_verdict,
+        "by_source": by_source,
+        "seen_tickers_count": seen_count,
+        "recent_trades": recent_trades,
+        "recent_runs": recent_runs,
+    }
+
+
+def _extract_verdict_label(verdict_text: str) -> str:
+    """Pull the verdict keyword from the full verdict text."""
+    upper = (verdict_text or "").upper()
+    if "STRONG BUY" in upper:
+        return "STRONG BUY"
+    if "BUY" in upper:
+        return "BUY"
+    if "WATCH" in upper:
+        return "WATCH"
+    if "AVOID" in upper:
+        return "AVOID"
+    return "OTHER"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard (public — no API key, behind Tailscale)
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    """Serve the live portfolio dashboard."""
+    return _DASHBOARD_HTML
+
+
+# ---------------------------------------------------------------------------
+# Dashboard HTML (inline — no static file dependencies)
+# ---------------------------------------------------------------------------
+
+_DASHBOARD_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PrimoGreedy Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0e17;--s1:#111827;--s2:#1a2236;--bd:#1e293b;--cy:#22d3ee;--pu:#a78bfa;
+--gn:#34d399;--rd:#f87171;--yl:#fbbf24;--tx:#e2e8f0;--td:#94a3b8;--tw:#f8fafc}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--tx);line-height:1.5}
+.wrap{max-width:1200px;margin:0 auto;padding:24px}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px}
+header h1{font-size:28px;font-weight:800;letter-spacing:-1px}
+header h1 span{background:linear-gradient(135deg,var(--cy),var(--pu));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.badge{font-size:12px;padding:4px 12px;border:1px solid var(--bd);border-radius:99px;color:var(--gn);background:rgba(52,211,153,.08)}
+.badge .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--gn);margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:32px}
+.card{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:20px}
+.card .label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--td);margin-bottom:4px}
+.card .val{font-size:32px;font-weight:700;color:var(--tw)}
+.card .sub{font-size:13px;color:var(--td);margin-top:4px}
+.card .val.green{color:var(--gn)}.card .val.red{color:var(--rd)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:32px}
+@media(max-width:768px){.grid2{grid-template-columns:1fr}}
+.panel{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:24px}
+.panel h2{font-size:16px;margin-bottom:16px;color:var(--tw)}
+canvas{max-height:260px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:10px 12px;border-bottom:1px solid var(--bd);color:var(--td);font-weight:600;
+text-transform:uppercase;letter-spacing:.5px;font-size:11px;cursor:pointer;user-select:none}
+th:hover{color:var(--cy)}
+td{padding:10px 12px;border-bottom:1px solid rgba(30,41,59,.5)}
+tr:hover td{background:rgba(34,211,238,.03)}
+.ticker{font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--cy)}
+.verdict-buy{color:var(--gn);font-weight:600}.verdict-watch{color:var(--yl);font-weight:600}
+.verdict-avoid{color:var(--rd);font-weight:600}.verdict-strong{color:#2dd4bf;font-weight:700}
+.gain-pos{color:var(--gn)}.gain-neg{color:var(--rd)}
+.broker-filled{color:var(--gn);font-size:11px}.broker-pending{color:var(--yl);font-size:11px}
+.broker-none{color:var(--td);font-size:11px}
+.activity{list-style:none;max-height:320px;overflow-y:auto}
+.activity li{padding:8px 0;border-bottom:1px solid rgba(30,41,59,.4);font-size:13px;display:flex;justify-content:space-between}
+.activity .ts{color:var(--td);font-size:11px;font-family:'JetBrains Mono',monospace}
+.refresh{font-size:11px;color:var(--td);text-align:center;margin-top:24px}
+.loading{text-align:center;padding:40px;color:var(--td)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Primo<span>Greedy</span> Dashboard</h1>
+  <div class="badge"><span class="dot"></span>Live — Auto-refresh 5m</div>
+</header>
+
+<div class="cards" id="cards"><div class="loading">Loading...</div></div>
+
+<div class="grid2">
+  <div class="panel"><h2>Verdict Distribution</h2><canvas id="verdictChart"></canvas></div>
+  <div class="panel"><h2>Position Sizing</h2><canvas id="sizingChart"></canvas></div>
+</div>
+
+<div class="panel" style="margin-bottom:32px">
+  <h2>Portfolio</h2>
+  <div style="overflow-x:auto">
+    <table id="portfolioTable">
+      <thead><tr>
+        <th data-col="ticker">Ticker</th><th data-col="date">Date</th>
+        <th data-col="entry_price">Entry</th><th data-col="verdict">Verdict</th>
+        <th data-col="position_size">Kelly %</th><th data-col="broker_status">Broker</th>
+        <th data-col="source">Source</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel"><h2>Recent Agent Runs</h2><ul class="activity" id="runs"></ul></div>
+  <div class="panel"><h2>Seen Tickers (Active)</h2><div id="seenInfo" style="margin-bottom:12px"></div><ul class="activity" id="seen"></ul></div>
+</div>
+
+<div class="refresh" id="refreshNote"></div>
+</div>
+
+<script>
+const API_KEY = '""" + API_KEY + """';
+const H = {'X-API-Key': API_KEY};
+let sortCol = 'date', sortAsc = false;
+
+async function load() {
+  try {
+    const [sumR, seenR] = await Promise.all([
+      fetch('/portfolio/summary', {headers: H}),
+      fetch('/seen-tickers', {headers: H})
+    ]);
+    const sum = await sumR.json();
+    const seen = await seenR.json();
+    renderCards(sum, seen);
+    renderVerdictChart(sum.by_verdict);
+    renderSizingChart(sum.recent_trades);
+    renderTable(sum.recent_trades);
+    renderRuns(sum.recent_runs);
+    renderSeen(seen);
+    document.getElementById('refreshNote').textContent =
+      'Last refresh: ' + new Date().toLocaleTimeString() + ' — next in 5 min';
+  } catch(e) {
+    document.getElementById('cards').innerHTML =
+      '<div class="loading">Error loading data: ' + e.message + '</div>';
+  }
+}
+
+function renderCards(sum, seen) {
+  const buys = (sum.by_verdict['BUY']||0) + (sum.by_verdict['STRONG BUY']||0);
+  const avoids = sum.by_verdict['AVOID']||0;
+  const watches = sum.by_verdict['WATCH']||0;
+  const seenCount = Object.keys(seen).length;
+  document.getElementById('cards').innerHTML = `
+    <div class="card"><div class="label">Total Trades</div><div class="val">${sum.total_trades}</div>
+      <div class="sub">${buys} buys, ${watches} watch, ${avoids} avoid</div></div>
+    <div class="card"><div class="label">Buy Rate</div>
+      <div class="val green">${sum.total_trades ? Math.round(buys/sum.total_trades*100) : 0}%</div>
+      <div class="sub">${buys} actionable of ${sum.total_trades}</div></div>
+    <div class="card"><div class="label">Seen Tickers</div><div class="val">${seenCount}</div>
+      <div class="sub">Active in ledger</div></div>
+    <div class="card"><div class="label">Sources</div><div class="val">${Object.keys(sum.by_source).length}</div>
+      <div class="sub">${Object.entries(sum.by_source).map(([k,v])=>k+': '+v).join(', ')}</div></div>`;
+}
+
+let vChart, sChart;
+function renderVerdictChart(bv) {
+  const labels = Object.keys(bv), data = Object.values(bv);
+  const colors = labels.map(l => l==='BUY'?'#34d399':l==='STRONG BUY'?'#2dd4bf':l==='WATCH'?'#fbbf24':'#f87171');
+  if (vChart) vChart.destroy();
+  vChart = new Chart(document.getElementById('verdictChart'), {
+    type:'doughnut', data:{labels, datasets:[{data, backgroundColor:colors, borderWidth:0}]},
+    options:{plugins:{legend:{labels:{color:'#94a3b8',font:{size:12}}}},cutout:'60%'}
+  });
+}
+
+function renderSizingChart(trades) {
+  const filtered = trades.filter(t => t.position_size > 0);
+  const labels = filtered.map(t => t.ticker);
+  const data = filtered.map(t => t.position_size);
+  const colors = filtered.map(t => {
+    const v = (t.verdict||'').toUpperCase();
+    return v.includes('STRONG')?'#2dd4bf':v.includes('BUY')?'#34d399':v.includes('WATCH')?'#fbbf24':'#f87171';
+  });
+  if (sChart) sChart.destroy();
+  sChart = new Chart(document.getElementById('sizingChart'), {
+    type:'bar', data:{labels, datasets:[{label:'Kelly %', data, backgroundColor:colors, borderRadius:4}]},
+    options:{plugins:{legend:{display:false}},scales:{
+      x:{ticks:{color:'#94a3b8',font:{size:10}},grid:{display:false}},
+      y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'rgba(30,41,59,.5)'}}
+    }}
+  });
+}
+
+function renderTable(trades) {
+  const sorted = [...trades].sort((a,b) => {
+    let av = a[sortCol], bv = b[sortCol];
+    if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv||'').toLowerCase(); }
+    if (av < bv) return sortAsc ? -1 : 1;
+    if (av > bv) return sortAsc ? 1 : -1;
+    return 0;
+  });
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = sorted.map(t => {
+    const vc = verdictClass(t.verdict);
+    const bc = t.broker_status === 'filled' ? 'broker-filled' :
+               t.broker_status === 'none' ? 'broker-none' : 'broker-pending';
+    return `<tr>
+      <td class="ticker">${t.ticker}</td><td>${t.date}</td>
+      <td>$${t.entry_price.toFixed(2)}</td><td class="${vc}">${t.verdict}</td>
+      <td>${t.position_size > 0 ? t.position_size.toFixed(1)+'%' : '—'}</td>
+      <td class="${bc}">${t.broker_status||'none'}</td>
+      <td>${t.source}</td></tr>`;
+  }).join('');
+}
+
+function verdictClass(v) {
+  const u = (v||'').toUpperCase();
+  if (u.includes('STRONG')) return 'verdict-strong';
+  if (u.includes('BUY')) return 'verdict-buy';
+  if (u.includes('WATCH')) return 'verdict-watch';
+  return 'verdict-avoid';
+}
+
+function renderRuns(runs) {
+  const el = document.getElementById('runs');
+  if (!runs || !runs.length) { el.innerHTML = '<li>No runs recorded</li>'; return; }
+  el.innerHTML = runs.map(r =>
+    `<li><span><span class="ticker">${r.ticker}</span> — ${r.status} (${r.region||'?'})</span>
+     <span class="ts">${r.timestamp?.slice(0,16)||''}</span></li>`
+  ).join('');
+}
+
+function renderSeen(seen) {
+  const tickers = Object.entries(seen).sort((a,b) => b[1]-a[1]);
+  const el = document.getElementById('seen');
+  document.getElementById('seenInfo').innerHTML =
+    `<span style="color:var(--td);font-size:13px">${tickers.length} tickers in active ledger</span>`;
+  el.innerHTML = tickers.slice(0, 30).map(([t, ts]) => {
+    const d = new Date(ts * 1000);
+    return `<li><span class="ticker">${t}</span><span class="ts">${d.toLocaleDateString()}</span></li>`;
+  }).join('');
+}
+
+document.querySelectorAll('th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = true; }
+    load();
+  });
+});
+
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>
+"""

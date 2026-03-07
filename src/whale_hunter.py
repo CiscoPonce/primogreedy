@@ -41,6 +41,7 @@ from src.core.search import brave_search
 from src.core.ticker_utils import normalize_price, REGION_SUFFIXES
 from src.core.memory import load_seen_tickers, mark_ticker_seen
 from src.core.state import AgentState
+from src.core.online_eval import log_online_feedback, tag_for_review, get_current_run_id
 
 from src.discovery.screener import screen_microcaps, get_trending_tickers_from_brave
 from src.discovery.scoring import rank_candidates
@@ -268,6 +269,9 @@ def analyst_node(state):
                                structured_verdict=result.verdict,
                                position_size=result.position_size)
 
+            _run_id = get_current_run_id()
+            log_online_feedback(verdict, ticker, run_id=_run_id)
+            tag_for_review(verdict, ticker, run_id=_run_id)
             return {
                 "final_verdict": verdict, "debate_used": True,
                 "bull_case": debate_result.get("bull_case", ""),
@@ -326,6 +330,9 @@ def analyst_node(state):
         record_paper_trade(ticker, price, verdict, source="Morning Cron",
                            structured_verdict=result.verdict,
                            position_size=result.position_size)
+        _run_id = get_current_run_id()
+        log_online_feedback(verdict, ticker, run_id=_run_id)
+        tag_for_review(verdict, ticker, run_id=_run_id)
     except Exception as exc:
         logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
         try:
@@ -347,6 +354,9 @@ def analyst_node(state):
                 )
             record_paper_trade(ticker, price, verdict, source="Morning Cron",
                                position_size=pos)
+            _run_id = get_current_run_id()
+            log_online_feedback(verdict, ticker, run_id=_run_id, is_fallback=True)
+            tag_for_review(verdict, ticker, run_id=_run_id, is_fallback=True)
         except Exception as exc2:
             logger.error("LLM analysis failed for %s: %s", ticker, exc2)
             verdict = f"LLM analysis unavailable: {exc2}"
