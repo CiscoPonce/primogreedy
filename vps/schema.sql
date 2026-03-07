@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS paper_portfolio (
     verdict       VARCHAR NOT NULL,
     source        VARCHAR DEFAULT 'unknown',
     position_size DOUBLE DEFAULT 0,
+    order_id      VARCHAR,
+    fill_price    DOUBLE,
+    broker_status VARCHAR DEFAULT 'none',
     created_at    TIMESTAMP DEFAULT current_timestamp,
     UNIQUE (ticker, date)  -- prevent duplicate same-day entries
 );

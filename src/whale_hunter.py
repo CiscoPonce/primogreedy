@@ -23,7 +23,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, RetryPolicy, Send
 
-from src.llm import get_llm, invoke_with_fallback
+from src.llm import get_llm, get_structured_llm, invoke_with_fallback
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -216,17 +216,8 @@ def analyst_node(state):
         except Exception as exc:
             logger.warning("SEC EDGAR failed for %s: %s", ticker, exc)
 
-    prompt = f"""
-    Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
-    
-    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
-    QUANTITATIVE THESIS: {thesis}
-    """
-
-    if sec_context:
-        prompt += f"\n{sec_context}\n"
-
-    # Agentic tool calling for USA stocks via Finnhub + insider feed
+    # Build deep-fundamentals context
+    deep_fundamentals = ""
     if region == "USA" and "." not in ticker:
         logger.info("Researching Finnhub databases for %s...", ticker)
         context = ""
@@ -237,13 +228,63 @@ def analyst_node(state):
         except Exception as exc:
             logger.warning("Finnhub tool error for %s: %s", ticker, exc)
 
-        # Proposal H: Add insider-feed data
         insider = get_insider_buys(ticker)
         context += f"\nInsider Sentiment (6mo): {insider['sentiment']} | MSPR: {insider['mspr']} | Net Shares: {insider['change']}\n"
-
-        prompt += f"\nDEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}\n"
+        deep_fundamentals = f"DEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}"
     else:
-        prompt += f"\nNEWS: {str(news)[:1500]}\n"
+        deep_fundamentals = f"NEWS: {str(news)[:1500]}"
+
+    # --- Debate or single-LLM path ---
+    from src.agents.debate import is_debate_enabled, run_debate
+    from src.models.kelly import get_kelly_stats, calculate_position_size
+
+    if is_debate_enabled():
+        logger.info("Running multi-agent debate for %s...", ticker)
+        try:
+            debate_result = run_debate(
+                ticker=ticker,
+                company_name=state.get("company_name", ticker),
+                financial_data_summary=str(info)[:2000],
+                deep_fundamentals=deep_fundamentals,
+                sec_context=sec_context,
+                strategy=strategy,
+                price=price,
+                eps=eps,
+                book_value=book_value,
+                ebitda=info.get("ebitda", 0) or 0,
+            )
+            result = debate_result["_structured_result"]
+
+            stats = get_kelly_stats()
+            result.position_size = calculate_position_size(stats, result.verdict)
+            result.kelly_win_rate = stats.win_rate
+            result.kelly_total_trades = stats.total_trades
+
+            verdict = result.to_report()
+            record_paper_trade(ticker, price, verdict, source="Morning Cron",
+                               structured_verdict=result.verdict,
+                               position_size=result.position_size)
+
+            return {
+                "final_verdict": verdict, "debate_used": True,
+                "bull_case": debate_result.get("bull_case", ""),
+                "bear_case": debate_result.get("bear_case", ""),
+            }
+        except Exception as exc:
+            logger.warning("Debate failed for %s, falling back to single-LLM: %s", ticker, exc)
+
+    # --- Single-LLM path (default or debate fallback) ---
+    prompt = f"""
+    Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
+    
+    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
+    QUANTITATIVE THESIS: {thesis}
+    """
+
+    if sec_context:
+        prompt += f"\n{sec_context}\n"
+
+    prompt += f"\n{deep_fundamentals}\n"
 
     prompt += f"""
     Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis and recent insider behavior/news. Do not use fluff or buzzwords.
@@ -269,9 +310,8 @@ def analyst_node(state):
     try:
         import warnings
         from src.models.verdict import InvestmentVerdict
-        from src.models.kelly import get_kelly_stats, calculate_position_size
 
-        structured_llm = get_llm().with_structured_output(InvestmentVerdict)
+        structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
             result = structured_llm.invoke(prompt)
@@ -289,7 +329,23 @@ def analyst_node(state):
         logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
         try:
             verdict = invoke_with_fallback(prompt)
-            record_paper_trade(ticker, price, verdict, source="Morning Cron")
+            stats = get_kelly_stats()
+            v_upper = verdict.upper()
+            verdict_type = "AVOID"
+            if "STRONG BUY" in v_upper:
+                verdict_type = "STRONG BUY"
+            elif "BUY" in v_upper:
+                verdict_type = "BUY"
+            elif "WATCH" in v_upper:
+                verdict_type = "WATCH"
+            pos = calculate_position_size(stats, verdict_type)
+            if pos > 0:
+                verdict += (
+                    f"\n\n### POSITION SIZING (Kelly Criterion)\n"
+                    f"**Recommended allocation: {pos:.1f}% of portfolio**"
+                )
+            record_paper_trade(ticker, price, verdict, source="Morning Cron",
+                               position_size=pos)
         except Exception as exc2:
             logger.error("LLM analysis failed for %s: %s", ticker, exc2)
             verdict = f"LLM analysis unavailable: {exc2}"
@@ -399,22 +455,42 @@ app = _orchestrator.compile(checkpointer=InMemorySaver())
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logger.info("Starting Global Micro-Cap Hunter (Screener + Brave Edition)...")
+    catalyst_ticker = os.getenv("CATALYST_TICKER", "").strip()
 
-    try:
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(HARD_TIMEOUT_SECONDS)
-        logger.info("Timeout set: %ds", HARD_TIMEOUT_SECONDS)
-    except (AttributeError, ValueError):
-        logger.info("SIGALRM not available on this platform")
+    if catalyst_ticker:
+        logger.info("Catalyst alert mode — analysing %s only", catalyst_ticker)
+        try:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(HARD_TIMEOUT_SECONDS)
+        except (AttributeError, ValueError):
+            pass
 
-    regions = ["USA", "UK", "Canada", "Australia"]
+        config = {
+            "configurable": {"thread_id": f"catalyst-{catalyst_ticker.lower()}"},
+            "recursion_limit": 30,
+        }
+        _region_app.invoke(
+            {"region": "USA", "retry_count": 0, "ticker": catalyst_ticker},
+            config,
+        )
+        logger.info("Catalyst analysis complete for %s.", catalyst_ticker)
+    else:
+        logger.info("Starting Global Micro-Cap Hunter (Screener + Brave Edition)...")
 
-    config = {"configurable": {"thread_id": "global-hunt"}, "recursion_limit": 30}
-    result = app.invoke({"regions": regions}, config)
+        try:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(HARD_TIMEOUT_SECONDS)
+            logger.info("Timeout set: %ds", HARD_TIMEOUT_SECONDS)
+        except (AttributeError, ValueError):
+            logger.info("SIGALRM not available on this platform")
 
-    for entry in result.get("region_results", []):
-        status = "OK" if entry.get("success") else f"FAILED: {entry.get('error', 'unknown')}"
-        logger.info("Region %s: %s", entry.get("region"), status)
+        regions = ["USA", "UK", "Canada", "Australia"]
 
-    logger.info("Global mission complete.")
+        config = {"configurable": {"thread_id": "global-hunt"}, "recursion_limit": 30}
+        result = app.invoke({"regions": regions}, config)
+
+        for entry in result.get("region_results", []):
+            status = "OK" if entry.get("success") else f"FAILED: {entry.get('error', 'unknown')}"
+            logger.info("Region %s: %s", entry.get("region"), status)
+
+        logger.info("Global mission complete.")

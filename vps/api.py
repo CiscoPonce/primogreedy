@@ -55,6 +55,9 @@ def init_db():
             verdict       VARCHAR NOT NULL,
             source        VARCHAR DEFAULT 'unknown',
             position_size DOUBLE DEFAULT 0,
+            order_id      VARCHAR,
+            fill_price    DOUBLE,
+            broker_status VARCHAR DEFAULT 'none',
             created_at    TIMESTAMP DEFAULT current_timestamp,
             UNIQUE (ticker, date)
         );
@@ -115,6 +118,15 @@ class TradeIn(BaseModel):
     verdict: str
     source: str = "unknown"
     position_size: float = 0.0
+    order_id: Optional[str] = None
+    fill_price: Optional[float] = None
+    broker_status: str = "none"
+
+
+class TradeFillUpdate(BaseModel):
+    order_id: str
+    fill_price: Optional[float] = None
+    broker_status: str = "filled"
 
 
 # ---------------------------------------------------------------------------
@@ -191,15 +203,34 @@ def record_trade(body: TradeIn, x_api_key: str = Header(...)):
     con = get_db()
     try:
         con.execute(
-            """INSERT INTO paper_portfolio (ticker, entry_price, date, verdict, source, position_size)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            [body.ticker, body.entry_price, body.date, body.verdict, body.source, body.position_size],
+            """INSERT INTO paper_portfolio
+               (ticker, entry_price, date, verdict, source, position_size, order_id, fill_price, broker_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [body.ticker, body.entry_price, body.date, body.verdict,
+             body.source, body.position_size, body.order_id,
+             body.fill_price, body.broker_status],
         )
     except duckdb.ConstraintException:
         con.close()
         return {"status": "duplicate", "ticker": body.ticker, "date": body.date}
     con.close()
     return {"status": "ok", "ticker": body.ticker}
+
+
+@app.patch("/portfolio/{ticker}/fill")
+def update_trade_fill(ticker: str, body: TradeFillUpdate, x_api_key: str = Header(...)):
+    """Update a trade's broker fill information after order execution."""
+    verify_key(x_api_key)
+    con = get_db()
+    con.execute(
+        """UPDATE paper_portfolio
+           SET order_id = ?, fill_price = ?, broker_status = ?
+           WHERE ticker = ? AND order_id = ? OR (ticker = ? AND date = current_date)""",
+        [body.order_id, body.fill_price, body.broker_status,
+         ticker, body.order_id, ticker],
+    )
+    con.close()
+    return {"status": "ok", "ticker": ticker}
 
 
 @app.get("/portfolio/evaluate")

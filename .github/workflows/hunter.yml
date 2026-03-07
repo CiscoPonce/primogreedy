@@ -5,6 +5,8 @@ on:
     # Runs at 06:00 AM UTC daily
     - cron: '0 6 * * *'
   workflow_dispatch: # Manual Button
+  repository_dispatch:
+    types: [catalyst-alert]
 
 jobs:
   global-hunt:
@@ -47,6 +49,11 @@ jobs:
           LANGSMITH_WORKSPACE_ID: ${{ secrets.LANGSMITH_WORKSPACE_ID }}
           VPS_API_URL: ${{ secrets.VPS_API_URL }}
           VPS_API_KEY: ${{ secrets.VPS_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_ENABLED: ${{ secrets.ALPACA_ENABLED }}
+          USE_DEBATE: ${{ secrets.USE_DEBATE }}
+          CATALYST_TICKER: ${{ github.event.client_payload.ticker || '' }}
         run: PYTHONPATH=. python src/whale_hunter.py
 
       # 🚨 CRITICAL NEW STEP: Save the memory file safely without crashing

@@ -48,6 +48,25 @@ def get_llm() -> ChatOpenAI:
     return _llm_instance
 
 
+def get_structured_llm(max_tokens: int = 4096) -> ChatOpenAI:
+    """Return an LLM instance configured for structured output.
+
+    Uses a capped ``max_tokens`` to prevent reasoning models from
+    burning 65 k tokens before producing the structured response.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not found.")
+
+    return ChatOpenAI(
+        model=MODEL_CHAIN[0],
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+        temperature=0,
+        max_tokens=max_tokens,
+    )
+
+
 def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm_call") -> str:
     """Invoke the LLM with automatic model fallback on 429 rate limits.
 

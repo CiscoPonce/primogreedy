@@ -53,3 +53,5 @@ resend
 yfinance
 matplotlib
 backtrader
+alpaca-trade-api>=3.0
+beautifulsoup4

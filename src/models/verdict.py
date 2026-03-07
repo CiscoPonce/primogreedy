@@ -1,6 +1,14 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+_HEADER_RE = re.compile(r"^#{1,4}\s+.*$", re.MULTILINE)
+
+
+def _strip_headers(text: str) -> str:
+    """Remove any markdown headers the LLM embedded in a field value."""
+    return _HEADER_RE.sub("", text).strip()
 
 
 class InvestmentVerdict(BaseModel):
@@ -34,13 +42,17 @@ class InvestmentVerdict(BaseModel):
 
     def to_report(self) -> str:
         """Render as the markdown report format the pipeline expects."""
+        qb = _strip_headers(self.quantitative_base)
+        lp = _strip_headers(self.lynch_pitch)
+        mi = _strip_headers(self.munger_invert)
+
         report = (
             f"### THE QUANTITATIVE BASE (Graham / Asset Play)\n"
-            f"{self.quantitative_base}\n\n"
+            f"{qb}\n\n"
             f"### THE LYNCH PITCH (Why I would own this)\n"
-            f"{self.lynch_pitch}\n\n"
+            f"{lp}\n\n"
             f"### THE MUNGER INVERT (How I could lose money)\n"
-            f"{self.munger_invert}\n\n"
+            f"{mi}\n\n"
             f"### FINAL VERDICT\n"
             f"**{self.verdict}** — {self.bottom_line}"
         )

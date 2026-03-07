@@ -21,3 +21,6 @@ class AgentState(TypedDict, total=False):
     chart_data: bytes
     manual_search: bool
     candidate_scores: Annotated[list, operator.add]
+    bull_case: str
+    bear_case: str
+    debate_used: bool

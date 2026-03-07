@@ -15,7 +15,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, RetryPolicy
 
-from src.llm import get_llm, invoke_with_fallback
+from src.llm import get_llm, get_structured_llm, invoke_with_fallback
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -313,7 +313,48 @@ def analyst_node(state):
         except Exception as exc:
             logger.warning("SEC EDGAR failed for %s: %s", ticker, exc)
 
-    # --- Build prompt from Hub (or local fallback) ---
+    # --- Debate or single-LLM path ---
+    from src.agents.debate import is_debate_enabled, run_debate
+    from src.models.kelly import get_kelly_stats, calculate_position_size
+
+    debate_result = None
+    if is_debate_enabled():
+        logger.info("Running multi-agent debate for %s...", ticker)
+        try:
+            debate_result = run_debate(
+                ticker=ticker,
+                company_name=state.get("company_name", ticker),
+                financial_data_summary=str(info)[:2000],
+                deep_fundamentals=deep_fundamentals,
+                sec_context=sec_context,
+                strategy=strategy,
+                price=price,
+                eps=eps,
+                book_value=book_value,
+                ebitda=ebitda,
+            )
+            result = debate_result["_structured_result"]
+
+            stats = get_kelly_stats()
+            result.position_size = calculate_position_size(stats, result.verdict)
+            result.kelly_win_rate = stats.win_rate
+            result.kelly_total_trades = stats.total_trades
+
+            verdict = result.to_report()
+            record_paper_trade(ticker, price, verdict, source="Chainlit UI",
+                               structured_verdict=result.verdict,
+                               position_size=result.position_size)
+
+            return {
+                "final_verdict": verdict, "final_report": verdict,
+                "chart_data": chart_bytes, "debate_used": True,
+                "bull_case": debate_result.get("bull_case", ""),
+                "bear_case": debate_result.get("bear_case", ""),
+            }
+        except Exception as exc:
+            logger.warning("Debate failed for %s, falling back to single-LLM: %s", ticker, exc)
+
+    # --- Single-LLM path (default or debate fallback) ---
     template = get_analyst_prompt()
     prompt = template.format(
         company_name=state.get("company_name", ticker),
@@ -331,9 +372,8 @@ def analyst_node(state):
     try:
         import warnings
         from src.models.verdict import InvestmentVerdict
-        from src.models.kelly import get_kelly_stats, calculate_position_size
 
-        structured_llm = get_llm().with_structured_output(InvestmentVerdict)
+        structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
             result = structured_llm.invoke(prompt)
@@ -351,7 +391,23 @@ def analyst_node(state):
         logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
         try:
             verdict = invoke_with_fallback(prompt, run_name="analyst_node")
-            record_paper_trade(ticker, price, verdict, source="Chainlit UI")
+            stats = get_kelly_stats()
+            v_upper = verdict.upper()
+            verdict_type = "AVOID"
+            if "STRONG BUY" in v_upper:
+                verdict_type = "STRONG BUY"
+            elif "BUY" in v_upper:
+                verdict_type = "BUY"
+            elif "WATCH" in v_upper:
+                verdict_type = "WATCH"
+            pos = calculate_position_size(stats, verdict_type)
+            if pos > 0:
+                verdict += (
+                    f"\n\n### POSITION SIZING (Kelly Criterion)\n"
+                    f"**Recommended allocation: {pos:.1f}% of portfolio**"
+                )
+            record_paper_trade(ticker, price, verdict, source="Chainlit UI",
+                               position_size=pos)
         except Exception as exc2:
             logger.error("LLM analysis failed for %s: %s", ticker, exc2)
             verdict = f"Strategy: {strategy}\nLLM analysis unavailable: {exc2}"

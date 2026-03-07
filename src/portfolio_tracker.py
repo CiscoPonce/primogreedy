@@ -32,6 +32,9 @@ def record_paper_trade(
 
     When *structured_verdict* is supplied (from ``InvestmentVerdict.verdict``),
     it is used directly, skipping brittle string matching on the full report.
+
+    For US tickers with actionable verdicts, also submits to Alpaca Paper
+    Trading (if ``ALPACA_ENABLED=true``).
     """
     if structured_verdict:
         _VALID = {"STRONG BUY", "BUY", "WATCH"}
@@ -51,7 +54,37 @@ def record_paper_trade(
 
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # Try VPS first
+    # --- Alpaca broker execution (US equities, BUY/STRONG BUY only) ---
+    order_id = None
+    fill_price = None
+    broker_status = "none"
+
+    try:
+        from src.broker.alpaca import calculate_order, submit_order, get_account
+
+        acct = get_account()
+        if acct and position_size > 0:
+            order_params = calculate_order(
+                ticker=ticker,
+                verdict=trade_type,
+                position_size_pct=position_size,
+                account_equity=acct["equity"],
+            )
+            if order_params:
+                result = submit_order(order_params)
+                order_id = result.order_id
+                fill_price = result.fill_price
+                broker_status = result.broker_status
+                if result.success:
+                    logger.info("Alpaca order filled: %s %d shares @ %s",
+                                ticker, result.qty, fill_price or "market")
+                else:
+                    logger.warning("Alpaca order not filled: %s — %s",
+                                   ticker, result.error or broker_status)
+    except Exception as exc:
+        logger.warning("Alpaca execution skipped for %s: %s", ticker, exc)
+
+    # --- Record to VPS ---
     if VPS_API_URL:
         try:
             resp = requests.post(
@@ -64,6 +97,9 @@ def record_paper_trade(
                     "verdict": trade_type,
                     "source": source,
                     "position_size": position_size,
+                    "order_id": order_id,
+                    "fill_price": fill_price,
+                    "broker_status": broker_status,
                 },
                 timeout=5,
             )
@@ -77,7 +113,7 @@ def record_paper_trade(
         except Exception as exc:
             logger.warning("VPS record_paper_trade failed, using local fallback: %s", exc)
 
-    # Local fallback
+    # --- Local fallback ---
     try:
         portfolio = []
         if os.path.exists(PORTFOLIO_FILE):
@@ -96,6 +132,9 @@ def record_paper_trade(
             "verdict": trade_type,
             "source": source,
             "position_size": position_size,
+            "order_id": order_id,
+            "fill_price": fill_price,
+            "broker_status": broker_status,
         }
 
         portfolio.append(trade)
