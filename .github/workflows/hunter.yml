@@ -31,6 +31,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install alpaca-trade-api>=3.0 || echo "alpaca-trade-api install skipped"
           
       - name: Run The Marathon
         env:
