@@ -18,7 +18,10 @@ import operator
 import os
 import signal
 import time
+import warnings
 from typing import Annotated, Literal, TypedDict
+
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, RetryPolicy, Send
@@ -312,9 +315,7 @@ def analyst_node(state):
         from src.models.verdict import InvestmentVerdict
 
         structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-            result = structured_llm.invoke(prompt)
+        result = structured_llm.invoke(prompt)
 
         stats = get_kelly_stats()
         result.position_size = calculate_position_size(stats, result.verdict)
