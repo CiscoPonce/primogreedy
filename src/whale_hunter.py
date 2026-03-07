@@ -313,7 +313,7 @@ def analyst_node(state):
 
         structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+            warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
             result = structured_llm.invoke(prompt)
 
         stats = get_kelly_stats()

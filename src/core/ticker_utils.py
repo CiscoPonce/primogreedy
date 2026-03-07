@@ -42,6 +42,10 @@ NOISE_WORDS = frozenset({
     "SPAC", "NBER", "OPEC", "MSCI", "EMEA", "APAC", "OECD", "FIFO",
     "FINRA", "SIPC", "FDIC", "LISA", "ISA", "ATM", "AMA", "FDA",
     "PHNX", "IPG", "GAAP", "IFRS", "FASB", "IASB", "PCAOB",
+    "THING", "TXTW", "MRC", "HERE", "ELSE", "SURE", "WORK",
+    "SAFE", "IDEA", "PLAN", "RULE", "STEP", "PLAY", "OPEN",
+    "PART", "NOTE", "LINE", "READ", "FILL", "SIZE", "WIDE",
+    "SIGN", "RISE", "LEAD", "PUSH", "PULL", "DROP", "JUMP",
 })
 
 _MAX_TICKER_LEN = 8  # longest valid ticker with suffix: e.g. CHE.UN.TO

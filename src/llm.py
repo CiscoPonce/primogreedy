@@ -48,7 +48,7 @@ def get_llm() -> ChatOpenAI:
     return _llm_instance
 
 
-def get_structured_llm(max_tokens: int = 8192) -> ChatOpenAI:
+def get_structured_llm(max_tokens: int = 16384) -> ChatOpenAI:
     """Return an LLM instance configured for structured output.
 
     Uses a capped ``max_tokens`` to prevent reasoning models from

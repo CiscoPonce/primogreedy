@@ -34,6 +34,12 @@ _VERDICT_SCALE = {
 }
 _POS_FLOOR = 1.0
 _POS_CAP = 25.0
+_VERDICT_CAPS = {
+    "STRONG BUY": 25.0,
+    "BUY": 15.0,
+    "WATCH": 5.0,
+}
+_MAX_KELLY_FRACTION = 0.5  # cap raw Kelly to avoid extreme values
 
 
 @dataclass
@@ -160,7 +166,7 @@ def get_kelly_stats() -> KellyStats:
     else:
         kelly = 0.0
 
-    kelly = max(kelly, 0.0)
+    kelly = max(min(kelly, _MAX_KELLY_FRACTION), 0.0)
 
     result = KellyStats(
         total_trades=total,
@@ -201,5 +207,6 @@ def calculate_position_size(stats: KellyStats, verdict: str) -> float:
         return 0.0
 
     raw = stats.half_kelly * scale * 100
+    cap = _VERDICT_CAPS.get(verdict, _POS_CAP)
 
-    return round(max(_POS_FLOOR, min(raw, _POS_CAP)), 1)
+    return round(max(_POS_FLOOR, min(raw, cap)), 1)
