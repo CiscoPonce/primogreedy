@@ -51,8 +51,6 @@ class DebateState(TypedDict, total=False):
 
 def _make_llm(model: str, max_tokens: int = 2048):
     from langchain_openai import ChatOpenAI
-    import time as _time
-    _time.sleep(_DEBATE_DELAY)  # respect free-tier rate limits
 
     return ChatOpenAI(
         model=model,
@@ -62,6 +60,41 @@ def _make_llm(model: str, max_tokens: int = 2048):
         max_tokens=max_tokens,
         request_timeout=90,
     )
+
+
+def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
+    import time
+    time.sleep(_DEBATE_DELAY)  # Initial spacing
+
+    llm = _make_llm(model)
+    # Try primary model with backoff
+    for attempt in range(4):
+        try:
+            return llm.invoke(prompt).content
+        except Exception as exc:
+            if "429" in str(exc):
+                sleep_time = 15 * (attempt + 1)
+                logger.warning("Rate limit on %s (attempt %d). Sleeping %ds...", model, attempt + 1, sleep_time)
+                time.sleep(sleep_time)
+            elif "404" in str(exc) or "too short" in str(exc):
+                break  # Fatal error, move to fallback
+            else:
+                logger.warning("Error on %s: %s", model, exc)
+                time.sleep(5)
+
+    # Fallback model
+    logger.warning("Primary model %s exhausted, switching to fallback %s", model, fallback_model)
+    fallback = _make_llm(fallback_model)
+    for attempt in range(3):
+        try:
+            return fallback.invoke(prompt).content
+        except Exception as exc:
+            if "429" in str(exc):
+                time.sleep(20)
+            else:
+                time.sleep(5)
+                
+    raise RuntimeError(f"Both {model} and {fallback_model} failed due to rate limits.")
 
 
 # ---------------------------------------------------------------------------
@@ -98,15 +131,7 @@ def pitcher_node(state: DebateState) -> dict:
         "Be specific and data-driven. Only cite facts present in the data above."
     )
 
-    llm = _make_llm(PITCHER_MODEL)
-    try:
-        response = llm.invoke(prompt)
-        bull_case = response.content
-    except Exception as exc:
-        logger.warning("Pitcher (%s) failed: %s — trying fallback", PITCHER_MODEL, exc)
-        fallback = _make_llm(MODEL_CHAIN[0])
-        response = fallback.invoke(prompt)
-        bull_case = response.content
+    bull_case = _resilient_llm_call(PITCHER_MODEL, prompt, MODEL_CHAIN[0])
 
     logger.info("Pitcher delivered bull case for %s (%d chars)", ticker, len(bull_case))
     return {"bull_case": bull_case}
@@ -149,15 +174,7 @@ def skeptic_node(state: DebateState) -> dict:
         "Be thorough but concise."
     )
 
-    llm = _make_llm(SKEPTIC_MODEL)
-    try:
-        response = llm.invoke(prompt)
-        bear_case = response.content
-    except Exception as exc:
-        logger.warning("Skeptic (%s) failed: %s — trying fallback", SKEPTIC_MODEL, exc)
-        fallback = _make_llm(MODEL_CHAIN[0])
-        response = fallback.invoke(prompt)
-        bear_case = response.content
+    bear_case = _resilient_llm_call(SKEPTIC_MODEL, prompt, MODEL_CHAIN[0])
 
     logger.info("Skeptic delivered bear case for %s (%d chars)", ticker, len(bear_case))
     return {"bear_case": bear_case}
@@ -225,7 +242,7 @@ def judge_node(state: DebateState) -> dict:
 # Compile the debate subgraph
 # ---------------------------------------------------------------------------
 
-_debate_retry = RetryPolicy(max_attempts=3, initial_interval=2.0)
+_debate_retry = RetryPolicy(max_attempts=4, initial_interval=15.0, backoff_factor=1.5)
 
 _debate_graph = StateGraph(DebateState)
 _debate_graph.add_node("pitcher", pitcher_node, retry=_debate_retry)
