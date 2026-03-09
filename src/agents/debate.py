@@ -27,6 +27,10 @@ PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "google/gemma-3-27b-it:free")
 SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "mistralai/mistral-small-3.1-24b-instruct:free")
 JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", MODEL_CHAIN[0])
 
+# Free-tier rate limits: 8 req/min per model.
+# Add delays between debate LLM calls to avoid 429s.
+_DEBATE_DELAY = int(os.getenv("DEBATE_DELAY_SECONDS", "10"))
+
 
 class DebateState(TypedDict, total=False):
     """Internal state for the debate subgraph."""
@@ -47,6 +51,8 @@ class DebateState(TypedDict, total=False):
 
 def _make_llm(model: str, max_tokens: int = 2048):
     from langchain_openai import ChatOpenAI
+    import time as _time
+    _time.sleep(_DEBATE_DELAY)  # respect free-tier rate limits
 
     return ChatOpenAI(
         model=model,
@@ -54,6 +60,7 @@ def _make_llm(model: str, max_tokens: int = 2048):
         base_url="https://openrouter.ai/api/v1",
         temperature=0,
         max_tokens=max_tokens,
+        request_timeout=90,
     )
 
 
@@ -97,7 +104,7 @@ def pitcher_node(state: DebateState) -> dict:
         bull_case = response.content
     except Exception as exc:
         logger.warning("Pitcher (%s) failed: %s — trying fallback", PITCHER_MODEL, exc)
-        fallback = _make_llm(MODEL_CHAIN[-1])
+        fallback = _make_llm(MODEL_CHAIN[0])
         response = fallback.invoke(prompt)
         bull_case = response.content
 
@@ -148,7 +155,7 @@ def skeptic_node(state: DebateState) -> dict:
         bear_case = response.content
     except Exception as exc:
         logger.warning("Skeptic (%s) failed: %s — trying fallback", SKEPTIC_MODEL, exc)
-        fallback = _make_llm(MODEL_CHAIN[-1])
+        fallback = _make_llm(MODEL_CHAIN[0])
         response = fallback.invoke(prompt)
         bear_case = response.content
 

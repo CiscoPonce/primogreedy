@@ -284,7 +284,7 @@ def main():
         })
 
         if i < len(trades):
-            time.sleep(2)
+            time.sleep(15)  # respect free-tier 8 req/min limits
 
     # --- Summary ---
     logger.info("=" * 60)
