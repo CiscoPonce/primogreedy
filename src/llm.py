@@ -9,14 +9,21 @@ load_dotenv()
 _llm_instance = None
 
 # Ordered by preference: quality + reliability + speed
+# NOTE: Nemotron is a *reasoning* model — it burns tokens on internal
+# chain-of-thought before producing output. Keep it as fallback only;
+# non-reasoning models should come first for structured-output tasks.
 MODEL_CHAIN = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
     "nvidia/nemotron-3-nano-30b-a3b:free",
     "stepfun/step-3.5-flash:free",
     "arcee-ai/trinity-large-preview:free",
     "google/gemma-3-27b-it:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
 ]
+
+# Best model for structured (JSON) output — must NOT be a reasoning model
+# which wastes completion tokens on internal chain-of-thought.
+STRUCTURED_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
 
 def get_llm() -> ChatOpenAI:
@@ -61,7 +68,7 @@ def get_structured_llm(max_tokens: int = 8192) -> ChatOpenAI:
         raise ValueError("OPENROUTER_API_KEY not found.")
 
     return ChatOpenAI(
-        model=MODEL_CHAIN[0],
+        model=STRUCTURED_MODEL,
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0,
@@ -117,7 +124,7 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm
                 err_str = str(exc)
                 if "429" in err_str:
                     logger.warning("Rate-limited on %s (attempt %d), trying next...", model_id, attempt + 1)
-                    time.sleep(2)
+                    time.sleep(8)  # respect free-tier 8 req/min
                     break  # move to next model
                 elif "404" in err_str:
                     logger.warning("Model %s not available, skipping", model_id)
