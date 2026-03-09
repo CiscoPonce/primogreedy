@@ -8,11 +8,17 @@ import io
 import gc
 import random
 import time
+import warnings
 import yfinance as yf
 import matplotlib.pyplot as plt
-from langgraph.graph import StateGraph, END
+from typing import Literal
 
-from src.llm import get_llm, invoke_with_fallback
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command, RetryPolicy
+
+from src.llm import get_llm, get_structured_llm, invoke_with_fallback
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -26,6 +32,7 @@ from src.core.search import brave_search
 from src.core.ticker_utils import extract_tickers, resolve_ticker_suffix, normalize_price
 from src.core.memory import load_seen_tickers, mark_ticker_seen
 from src.core.state import AgentState
+from src.core.online_eval import log_online_feedback, tag_for_review, get_current_run_id
 from src.prompts.senior_broker import get_analyst_prompt
 
 from src.discovery.screener import screen_microcaps, get_trending_tickers_from_brave
@@ -38,8 +45,8 @@ logger = get_logger(__name__)
 brave_market_search = brave_search
 
 # --- CONFIGURATION ---
-MAX_MARKET_CAP = 300_000_000
-MIN_MARKET_CAP = 10_000_000
+MAX_MARKET_CAP = 500_000_000
+MIN_MARKET_CAP = 5_000_000
 MAX_PRICE_PER_SHARE = 30.00
 MAX_RETRIES = 1
 
@@ -128,18 +135,31 @@ def scout_node(state):
     return {"ticker": ticker, "manual_search": False}
 
 
-def gatekeeper_node(state):
-    """Validate candidate with financial health checks."""
+def _gatekeeper_route(state, update) -> str:
+    """Decide where gatekeeper should route based on state + update."""
+    if state.get("manual_search"):
+        return "analyst"
+    if update.get("status") == "PASS":
+        return "analyst"
+    new_retries = update.get("retry_count", state.get("retry_count", 0))
+    if new_retries >= MAX_RETRIES:
+        return "analyst"
+    return "scout"
+
+
+def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
+    """Validate candidate with financial health checks. Routes via Command."""
     ticker = state.get("ticker", "NONE")
     retries = state.get("retry_count", 0)
 
     if ticker == "NONE":
-        return {
+        update = {
             "is_small_cap": False,
             "status": "FAIL",
             "retry_count": retries + 1,
             "financial_data": {"reason": "Scout found no readable ticker."},
         }
+        return Command(update=update, goto=_gatekeeper_route(state, update))
 
     mark_ticker_seen(ticker)
 
@@ -168,7 +188,7 @@ def gatekeeper_node(state):
         chart_bytes = generate_chart(ticker)
 
         if price > MAX_PRICE_PER_SHARE:
-            return {
+            update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
                 "status": "FAIL",
@@ -178,9 +198,10 @@ def gatekeeper_node(state):
                 "final_report": f"Price ${price:.2f} exceeds ${MAX_PRICE_PER_SHARE} limit.",
                 "chart_data": chart_bytes,
             }
+            return Command(update=update, goto=_gatekeeper_route(state, update))
 
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
-            return {
+            update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
                 "status": "FAIL",
@@ -190,10 +211,11 @@ def gatekeeper_node(state):
                 "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range.",
                 "chart_data": chart_bytes,
             }
+            return Command(update=update, goto=_gatekeeper_route(state, update))
 
         health = check_financial_health(ticker, lean_info)
         if health["status"] == "FAIL":
-            return {
+            update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
                 "status": "FAIL",
@@ -203,8 +225,9 @@ def gatekeeper_node(state):
                 "final_report": f"**GATEKEEPER REJECT:** {health['reason']}",
                 "chart_data": chart_bytes,
             }
+            return Command(update=update, goto=_gatekeeper_route(state, update))
 
-        return {
+        update = {
             "market_cap": mkt_cap,
             "is_small_cap": True,
             "status": "PASS",
@@ -212,15 +235,17 @@ def gatekeeper_node(state):
             "financial_data": lean_info,
             "chart_data": chart_bytes,
         }
+        return Command(update=update, goto="analyst")
 
     except Exception as exc:
         logger.error("Gatekeeper error for %s: %s", ticker, exc)
-        return {
+        update = {
             "is_small_cap": False,
             "status": "FAIL",
             "retry_count": retries + 1,
             "financial_data": {"reason": f"API Error: {exc}"},
         }
+        return Command(update=update, goto=_gatekeeper_route(state, update))
 
 
 def analyst_node(state):
@@ -283,7 +308,60 @@ def analyst_node(state):
     else:
         deep_fundamentals = f"NEWS: {str(news)[:1500]}"
 
-    # --- Build prompt from Hub (or local fallback) ---
+    # --- SEC EDGAR ground truth (US equities only) ---
+    sec_context = ""
+    if region == "USA" and "." not in ticker:
+        from src.sec_edgar import get_sec_filings
+        try:
+            sec_context = get_sec_filings.invoke({"ticker": ticker})
+        except Exception as exc:
+            logger.warning("SEC EDGAR failed for %s: %s", ticker, exc)
+
+    # --- Debate or single-LLM path ---
+    from src.agents.debate import is_debate_enabled, run_debate
+    from src.models.kelly import get_kelly_stats, calculate_position_size
+
+    debate_result = None
+    if is_debate_enabled():
+        logger.info("Running multi-agent debate for %s...", ticker)
+        try:
+            debate_result = run_debate(
+                ticker=ticker,
+                company_name=state.get("company_name", ticker),
+                financial_data_summary=str(info)[:2000],
+                deep_fundamentals=deep_fundamentals,
+                sec_context=sec_context,
+                strategy=strategy,
+                price=price,
+                eps=eps,
+                book_value=book_value,
+                ebitda=ebitda,
+            )
+            result = debate_result["_structured_result"]
+
+            stats = get_kelly_stats()
+            result.position_size = calculate_position_size(stats, result.verdict)
+            result.kelly_win_rate = stats.win_rate
+            result.kelly_total_trades = stats.total_trades
+
+            verdict = result.to_report()
+            record_paper_trade(ticker, price, verdict, source="Chainlit UI",
+                               structured_verdict=result.verdict,
+                               position_size=result.position_size)
+
+            _run_id = get_current_run_id()
+            log_online_feedback(verdict, ticker, run_id=_run_id)
+            tag_for_review(verdict, ticker, run_id=_run_id)
+            return {
+                "final_verdict": verdict, "final_report": verdict,
+                "chart_data": chart_bytes, "debate_used": True,
+                "bull_case": debate_result.get("bull_case", ""),
+                "bear_case": debate_result.get("bear_case", ""),
+            }
+        except Exception as exc:
+            logger.warning("Debate failed for %s, falling back to single-LLM: %s", ticker, exc)
+
+    # --- Single-LLM path (default or debate fallback) ---
     template = get_analyst_prompt()
     prompt = template.format(
         company_name=state.get("company_name", ticker),
@@ -295,26 +373,68 @@ def analyst_node(state):
         thesis=thesis,
         strategy=strategy,
         deep_fundamentals=deep_fundamentals,
-        sec_context="",  # Placeholder — SEC EDGAR data added in Epic 3
+        sec_context=sec_context,
     )
 
     try:
-        verdict = invoke_with_fallback(prompt, run_name="analyst_node")
-        record_paper_trade(ticker, price, verdict, source="Chainlit UI")
+        import warnings
+        from src.models.verdict import InvestmentVerdict
+
+        structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
+        result = structured_llm.invoke(prompt)
+
+        stats = get_kelly_stats()
+        result.position_size = calculate_position_size(stats, result.verdict)
+        result.kelly_win_rate = stats.win_rate
+        result.kelly_total_trades = stats.total_trades
+
+        verdict = result.to_report()
+        record_paper_trade(ticker, price, verdict, source="Chainlit UI",
+                           structured_verdict=result.verdict,
+                           position_size=result.position_size)
+        _run_id = get_current_run_id()
+        log_online_feedback(verdict, ticker, run_id=_run_id)
+        tag_for_review(verdict, ticker, run_id=_run_id)
     except Exception as exc:
-        logger.error("LLM analysis failed for %s: %s", ticker, exc)
-        verdict = f"Strategy: {strategy}\nLLM analysis unavailable: {exc}"
+        logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
+        try:
+            verdict = invoke_with_fallback(prompt, run_name="analyst_node")
+            stats = get_kelly_stats()
+            v_upper = verdict.upper()
+            verdict_type = "AVOID"
+            if "STRONG BUY" in v_upper:
+                verdict_type = "STRONG BUY"
+            elif "BUY" in v_upper:
+                verdict_type = "BUY"
+            elif "WATCH" in v_upper:
+                verdict_type = "WATCH"
+            pos = calculate_position_size(stats, verdict_type)
+            if pos > 0:
+                verdict += (
+                    f"\n\n### POSITION SIZING (Kelly Criterion)\n"
+                    f"**Recommended allocation: {pos:.1f}% of portfolio**"
+                )
+            record_paper_trade(ticker, price, verdict, source="Chainlit UI",
+                               position_size=pos)
+            _run_id = get_current_run_id()
+            log_online_feedback(verdict, ticker, run_id=_run_id, is_fallback=True)
+            tag_for_review(verdict, ticker, run_id=_run_id, is_fallback=True)
+        except Exception as exc2:
+            logger.error("LLM analysis failed for %s: %s", ticker, exc2)
+            verdict = f"Strategy: {strategy}\nLLM analysis unavailable: {exc2}"
 
     return {"final_verdict": verdict, "final_report": verdict, "chart_data": chart_bytes}
 
 
 # --- GRAPH ---
 
+_api_retry = RetryPolicy(max_attempts=3, initial_interval=2.0)
+
 workflow = StateGraph(AgentState)
-workflow.add_node("chat", chat_node)
-workflow.add_node("scout", scout_node)
-workflow.add_node("gatekeeper", gatekeeper_node)
-workflow.add_node("analyst", analyst_node)
+workflow.add_node("chat", chat_node, retry=_api_retry)
+workflow.add_node("scout", scout_node, retry=_api_retry)
+workflow.add_node("gatekeeper", gatekeeper_node, retry=_api_retry)
+workflow.add_node("analyst", analyst_node, retry=_api_retry)
 
 
 def initial_routing(state):
@@ -325,29 +445,9 @@ def initial_routing(state):
     return "scout"
 
 
-workflow.set_conditional_entry_point(
-    initial_routing,
-    {"chat": "chat", "scout": "scout"},
-)
-
-
-def check_status(state):
-    if state.get("manual_search"):
-        return "analyst"
-    if state.get("status") == "PASS":
-        return "analyst"
-    if state.get("retry_count", 0) >= MAX_RETRIES:
-        return "analyst"
-    return "scout"
-
-
+workflow.add_conditional_edges(START, initial_routing, ["chat", "scout"])
 workflow.add_edge("chat", END)
 workflow.add_edge("scout", "gatekeeper")
-workflow.add_conditional_edges(
-    "gatekeeper",
-    check_status,
-    {"analyst": "analyst", "scout": "scout"},
-)
 workflow.add_edge("analyst", END)
 
-app = workflow.compile()
+app = workflow.compile(checkpointer=InMemorySaver())

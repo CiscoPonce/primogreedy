@@ -53,19 +53,28 @@ def get_analyst_prompt() -> str:
 
     Tries LangSmith Hub first (if LANGCHAIN_API_KEY is set), otherwise
     returns the local fallback.
+
+    Supports ``PROMPT_VERSION`` env var for pinning to a specific Hub
+    commit.  Set to "latest" (default) or a commit hash like
+    "abc123def456" to lock a specific version during A/B testing.
     """
     if os.getenv("LANGCHAIN_API_KEY"):
         try:
             from langsmith import Client
 
             client = Client()
-            hub_prompt = client.pull_prompt("primogreedy/senior-broker")
+            version = os.getenv("PROMPT_VERSION", "latest").strip()
+            prompt_id = "primogreedy/senior-broker"
+            if version and version != "latest":
+                prompt_id = f"{prompt_id}:{version}"
+                logger.info("Pulling Hub prompt pinned to %s", version[:12])
 
-            # Extract the template string from the ChatPromptTemplate
+            hub_prompt = client.pull_prompt(prompt_id)
+            logger.info("Loaded analyst prompt from Hub (%s)", version)
+
             messages = hub_prompt.messages
             if messages:
                 template_str = messages[0].prompt.template
-                logger.info("Loaded analyst prompt from LangSmith Hub")
                 return template_str
         except Exception as exc:
             logger.warning("Hub pull failed, using local fallback: %s", exc)

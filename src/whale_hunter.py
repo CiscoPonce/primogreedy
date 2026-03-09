@@ -1,8 +1,11 @@
 """Daily automated micro-cap hunter (GitHub Actions cron).
 
-Pipeline:  Scout -> Gatekeeper -> Analyst -> Email
+Pipeline per region:  Scout -> Gatekeeper -> Analyst -> Email
 
-The Scout now uses a two-pronged discovery approach:
+An outer orchestrator graph dispatches all regions in parallel via the
+LangGraph ``Send`` API, then collects results.
+
+The Scout uses a two-pronged discovery approach:
   1. yFinance screener for systematic micro-cap filtering
   2. Brave Search for trending/momentum signals
   3. Quantitative scoring to pick the best candidate
@@ -11,12 +14,19 @@ Both feeds are merged, scored, and only the top candidate proceeds to
 the expensive LLM analyst step.
 """
 
+import operator
 import os
 import signal
 import time
-from langgraph.graph import StateGraph, END
+import warnings
+from typing import Annotated, Literal, TypedDict
 
-from src.llm import get_llm, invoke_with_fallback
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command, RetryPolicy, Send
+
+from src.llm import get_llm, get_structured_llm, invoke_with_fallback
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -31,6 +41,7 @@ from src.core.search import brave_search
 from src.core.ticker_utils import normalize_price, REGION_SUFFIXES
 from src.core.memory import load_seen_tickers, mark_ticker_seen
 from src.core.state import AgentState
+from src.core.online_eval import log_online_feedback, tag_for_review, get_current_run_id
 
 from src.discovery.screener import screen_microcaps, get_trending_tickers_from_brave
 from src.discovery.scoring import rank_candidates
@@ -39,8 +50,8 @@ from src.discovery.insider_feed import get_insider_buys
 logger = get_logger(__name__)
 
 # --- CONFIGURATION ---
-MAX_MARKET_CAP = 300_000_000
-MIN_MARKET_CAP = 10_000_000
+MAX_MARKET_CAP = 500_000_000
+MIN_MARKET_CAP = 5_000_000
 MAX_PRICE_PER_SHARE = 30.00
 MAX_RETRIES = 3
 HARD_TIMEOUT_SECONDS = 3000  # 50 min to match GitHub Actions
@@ -110,16 +121,22 @@ def scout_node(state):
     return {"ticker": ticker, "candidates": rest}
 
 
-def gatekeeper_node(state):
-    """Validate the candidate against hard financial criteria."""
+def gatekeeper_node(state) -> Command[Literal["analyst", "scout", "email"]]:
+    """Validate the candidate against hard financial criteria. Routes via Command."""
     import yfinance as yf
 
     ticker = state.get("ticker", "NONE")
     retries = state.get("retry_count", 0)
 
+    def _fail_route(new_retries: int) -> str:
+        if new_retries > MAX_RETRIES:
+            return "email"
+        return "scout"
+
     if ticker == "NONE":
         logger.warning("No ticker to evaluate")
-        return {"is_small_cap": False, "retry_count": retries + 1}
+        update = {"is_small_cap": False, "retry_count": retries + 1}
+        return Command(update=update, goto=_fail_route(retries + 1))
 
     logger.info("Gatekeeper evaluating %s...", ticker)
     try:
@@ -135,16 +152,19 @@ def gatekeeper_node(state):
 
         if price > MAX_PRICE_PER_SHARE:
             logger.info("%s rejected — price $%.2f > $%.2f", ticker, price, MAX_PRICE_PER_SHARE)
-            return {"is_small_cap": False, "retry_count": retries + 1}
+            update = {"is_small_cap": False, "retry_count": retries + 1}
+            return Command(update=update, goto=_fail_route(retries + 1))
 
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
             logger.info("%s rejected — cap $%s out of range", ticker, f"{mkt_cap:,.0f}")
-            return {"is_small_cap": False, "retry_count": retries + 1}
+            update = {"is_small_cap": False, "retry_count": retries + 1}
+            return Command(update=update, goto=_fail_route(retries + 1))
 
         health = check_financial_health(ticker, info)
         if health["status"] == "FAIL":
             logger.info("%s rejected — %s", ticker, health["reason"])
-            return {"is_small_cap": False, "retry_count": retries + 1}
+            update = {"is_small_cap": False, "retry_count": retries + 1}
+            return Command(update=update, goto=_fail_route(retries + 1))
 
         sector = health["metrics"].get("sector", "N/A")
         logger.info(
@@ -152,16 +172,18 @@ def gatekeeper_node(state):
             ticker, price, f"{mkt_cap:,.0f}", sector,
         )
 
-        return {
+        update = {
             "market_cap": mkt_cap,
             "is_small_cap": True,
             "company_name": name,
             "financial_data": info,
         }
+        return Command(update=update, goto="analyst")
 
     except Exception as exc:
         logger.error("yFinance error for %s: %s", ticker, exc)
-        return {"is_small_cap": False, "retry_count": retries + 1}
+        update = {"is_small_cap": False, "retry_count": retries + 1}
+        return Command(update=update, goto=_fail_route(retries + 1))
 
 
 def analyst_node(state):
@@ -189,14 +211,17 @@ def analyst_node(state):
     # Gather context
     news = brave_search(f"{ticker} stock analysis catalysts")
 
-    prompt = f"""
-    Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
-    
-    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
-    QUANTITATIVE THESIS: {thesis}
-    """
+    # SEC EDGAR ground truth (US equities only)
+    sec_context = ""
+    if region == "USA" and "." not in ticker:
+        from src.sec_edgar import get_sec_filings
+        try:
+            sec_context = get_sec_filings.invoke({"ticker": ticker})
+        except Exception as exc:
+            logger.warning("SEC EDGAR failed for %s: %s", ticker, exc)
 
-    # Agentic tool calling for USA stocks via Finnhub + insider feed
+    # Build deep-fundamentals context
+    deep_fundamentals = ""
     if region == "USA" and "." not in ticker:
         logger.info("Researching Finnhub databases for %s...", ticker)
         context = ""
@@ -207,13 +232,66 @@ def analyst_node(state):
         except Exception as exc:
             logger.warning("Finnhub tool error for %s: %s", ticker, exc)
 
-        # Proposal H: Add insider-feed data
         insider = get_insider_buys(ticker)
         context += f"\nInsider Sentiment (6mo): {insider['sentiment']} | MSPR: {insider['mspr']} | Net Shares: {insider['change']}\n"
-
-        prompt += f"\nDEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}\n"
+        deep_fundamentals = f"DEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}"
     else:
-        prompt += f"\nNEWS: {str(news)[:1500]}\n"
+        deep_fundamentals = f"NEWS: {str(news)[:1500]}"
+
+    # --- Debate or single-LLM path ---
+    from src.agents.debate import is_debate_enabled, run_debate
+    from src.models.kelly import get_kelly_stats, calculate_position_size
+
+    if is_debate_enabled():
+        logger.info("Running multi-agent debate for %s...", ticker)
+        try:
+            debate_result = run_debate(
+                ticker=ticker,
+                company_name=state.get("company_name", ticker),
+                financial_data_summary=str(info)[:2000],
+                deep_fundamentals=deep_fundamentals,
+                sec_context=sec_context,
+                strategy=strategy,
+                price=price,
+                eps=eps,
+                book_value=book_value,
+                ebitda=info.get("ebitda", 0) or 0,
+            )
+            result = debate_result["_structured_result"]
+
+            stats = get_kelly_stats()
+            result.position_size = calculate_position_size(stats, result.verdict)
+            result.kelly_win_rate = stats.win_rate
+            result.kelly_total_trades = stats.total_trades
+
+            verdict = result.to_report()
+            record_paper_trade(ticker, price, verdict, source="Morning Cron",
+                               structured_verdict=result.verdict,
+                               position_size=result.position_size)
+
+            _run_id = get_current_run_id()
+            log_online_feedback(verdict, ticker, run_id=_run_id)
+            tag_for_review(verdict, ticker, run_id=_run_id)
+            return {
+                "final_verdict": verdict, "debate_used": True,
+                "bull_case": debate_result.get("bull_case", ""),
+                "bear_case": debate_result.get("bear_case", ""),
+            }
+        except Exception as exc:
+            logger.warning("Debate failed for %s, falling back to single-LLM: %s", ticker, exc)
+
+    # --- Single-LLM path (default or debate fallback) ---
+    prompt = f"""
+    Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
+    
+    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
+    QUANTITATIVE THESIS: {thesis}
+    """
+
+    if sec_context:
+        prompt += f"\n{sec_context}\n"
+
+    prompt += f"\n{deep_fundamentals}\n"
 
     prompt += f"""
     Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis and recent insider behavior/news. Do not use fluff or buzzwords.
@@ -237,11 +315,51 @@ def analyst_node(state):
     """
 
     try:
-        verdict = invoke_with_fallback(prompt)
-        record_paper_trade(ticker, price, verdict, source="Morning Cron")
+        import warnings
+        from src.models.verdict import InvestmentVerdict
+
+        structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
+        result = structured_llm.invoke(prompt)
+
+        stats = get_kelly_stats()
+        result.position_size = calculate_position_size(stats, result.verdict)
+        result.kelly_win_rate = stats.win_rate
+        result.kelly_total_trades = stats.total_trades
+
+        verdict = result.to_report()
+        record_paper_trade(ticker, price, verdict, source="Morning Cron",
+                           structured_verdict=result.verdict,
+                           position_size=result.position_size)
+        _run_id = get_current_run_id()
+        log_online_feedback(verdict, ticker, run_id=_run_id)
+        tag_for_review(verdict, ticker, run_id=_run_id)
     except Exception as exc:
-        logger.error("LLM analysis failed for %s: %s", ticker, exc)
-        verdict = f"LLM analysis unavailable: {exc}"
+        logger.warning("Structured output failed for %s, falling back to plain LLM: %s", ticker, exc)
+        try:
+            verdict = invoke_with_fallback(prompt)
+            stats = get_kelly_stats()
+            v_upper = verdict.upper()
+            verdict_type = "AVOID"
+            if "STRONG BUY" in v_upper:
+                verdict_type = "STRONG BUY"
+            elif "BUY" in v_upper:
+                verdict_type = "BUY"
+            elif "WATCH" in v_upper:
+                verdict_type = "WATCH"
+            pos = calculate_position_size(stats, verdict_type)
+            if pos > 0:
+                verdict += (
+                    f"\n\n### POSITION SIZING (Kelly Criterion)\n"
+                    f"**Recommended allocation: {pos:.1f}% of portfolio**"
+                )
+            record_paper_trade(ticker, price, verdict, source="Morning Cron",
+                               position_size=pos)
+            _run_id = get_current_run_id()
+            log_online_feedback(verdict, ticker, run_id=_run_id, is_fallback=True)
+            tag_for_review(verdict, ticker, run_id=_run_id, is_fallback=True)
+        except Exception as exc2:
+            logger.error("LLM analysis failed for %s: %s", ticker, exc2)
+            verdict = f"LLM analysis unavailable: {exc2}"
 
     return {"final_verdict": verdict}
 
@@ -281,55 +399,109 @@ def email_node(state):
     return {}
 
 
-# --- GRAPH ---
+# ---------------------------------------------------------------------------
+# Per-region subgraph  (scout -> gatekeeper -> analyst -> email)
+# ---------------------------------------------------------------------------
 
-workflow = StateGraph(AgentState)
-workflow.add_node("scout", scout_node)
-workflow.add_node("gatekeeper", gatekeeper_node)
-workflow.add_node("analyst", analyst_node)
-workflow.add_node("email", email_node)
-workflow.set_entry_point("scout")
+_api_retry = RetryPolicy(max_attempts=3, initial_interval=2.0)
+
+_region_workflow = StateGraph(AgentState)
+_region_workflow.add_node("scout", scout_node, retry=_api_retry)
+_region_workflow.add_node("gatekeeper", gatekeeper_node, retry=_api_retry)
+_region_workflow.add_node("analyst", analyst_node, retry=_api_retry)
+_region_workflow.add_node("email", email_node, retry=_api_retry)
+_region_workflow.add_edge(START, "scout")
+_region_workflow.add_edge("scout", "gatekeeper")
+_region_workflow.add_edge("analyst", "email")
+_region_workflow.add_edge("email", END)
+_region_app = _region_workflow.compile(checkpointer=InMemorySaver())
 
 
-def check_status(state):
-    if state.get("is_small_cap"):
-        return "analyst"
-    if state.get("retry_count", 0) > MAX_RETRIES:
-        return "email"
-    return "scout"
+# ---------------------------------------------------------------------------
+# Orchestrator graph  (parallel fan-out via Send API)
+# ---------------------------------------------------------------------------
+
+class GlobalHunterState(TypedDict, total=False):
+    regions: list[str]
+    region_results: Annotated[list, operator.add]
 
 
-workflow.add_edge("scout", "gatekeeper")
-workflow.add_conditional_edges(
-    "gatekeeper",
-    check_status,
-    {"analyst": "analyst", "scout": "scout", "email": "email"},
-)
-workflow.add_edge("analyst", "email")
-workflow.add_edge("email", END)
-app = workflow.compile()
+def dispatch_regions(state: GlobalHunterState):
+    """Fan-out: emit one Send per region so they run in parallel."""
+    return [
+        Send("hunt_region", {"region": r})
+        for r in state["regions"]
+    ]
 
-# --- EXECUTION ---
+
+def hunt_region(state) -> dict:
+    """Invoke the full per-region pipeline and report back."""
+    region = state.get("region", "USA")
+    logger.info("--- Initiating hunt for %s ---", region)
+    try:
+        config = {
+            "configurable": {"thread_id": f"hunt-{region.lower()}"},
+            "recursion_limit": 30,
+        }
+        _region_app.invoke(
+            {"region": region, "retry_count": 0, "ticker": ""},
+            config,
+        )
+        logger.info("%s hunt complete.", region)
+        return {"region_results": [{"region": region, "success": True}]}
+    except Exception as exc:
+        logger.error("Error in %s: %s", region, exc, exc_info=True)
+        return {"region_results": [{"region": region, "success": False, "error": str(exc)}]}
+
+
+_orchestrator = StateGraph(GlobalHunterState)
+_orchestrator.add_node("hunt_region", hunt_region, retry=_api_retry)
+_orchestrator.add_conditional_edges(START, dispatch_regions, ["hunt_region"])
+_orchestrator.add_edge("hunt_region", END)
+app = _orchestrator.compile(checkpointer=InMemorySaver())
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logger.info("Starting Global Micro-Cap Hunter (Screener + Brave Edition)...")
+    catalyst_ticker = os.getenv("CATALYST_TICKER", "").strip()
 
-    try:
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(HARD_TIMEOUT_SECONDS)
-        logger.info("Timeout set: %ds", HARD_TIMEOUT_SECONDS)
-    except (AttributeError, ValueError):
-        logger.info("SIGALRM not available on this platform")
-
-    regions = ["USA", "UK", "Canada", "Australia"]
-
-    for market in regions:
-        logger.info("--- Initiating hunt for %s ---", market)
+    if catalyst_ticker:
+        logger.info("Catalyst alert mode — analysing %s only", catalyst_ticker)
         try:
-            app.invoke({"region": market, "retry_count": 0, "ticker": ""})
-            logger.info("%s hunt complete.", market)
-            time.sleep(5)
-        except Exception as exc:
-            logger.error("Error in %s: %s", market, exc, exc_info=True)
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(HARD_TIMEOUT_SECONDS)
+        except (AttributeError, ValueError):
+            pass
 
-    logger.info("Global mission complete.")
+        config = {
+            "configurable": {"thread_id": f"catalyst-{catalyst_ticker.lower()}"},
+            "recursion_limit": 30,
+        }
+        _region_app.invoke(
+            {"region": "USA", "retry_count": 0, "ticker": catalyst_ticker},
+            config,
+        )
+        logger.info("Catalyst analysis complete for %s.", catalyst_ticker)
+    else:
+        logger.info("Starting Global Micro-Cap Hunter (Screener + Brave Edition)...")
+
+        try:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(HARD_TIMEOUT_SECONDS)
+            logger.info("Timeout set: %ds", HARD_TIMEOUT_SECONDS)
+        except (AttributeError, ValueError):
+            logger.info("SIGALRM not available on this platform")
+
+        regions = ["USA", "UK", "Canada", "Australia"]
+
+        config = {"configurable": {"thread_id": "global-hunt"}, "recursion_limit": 30}
+        result = app.invoke({"regions": regions}, config)
+
+        for entry in result.get("region_results", []):
+            status = "OK" if entry.get("success") else f"FAILED: {entry.get('error', 'unknown')}"
+            logger.info("Region %s: %s", entry.get("region"), status)
+
+        logger.info("Global mission complete.")

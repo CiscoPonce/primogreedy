@@ -331,33 +331,25 @@ async def extract_nlp_features(
         return None
 
 
-async def news_intelligence_agent_node(state: AgentState) -> AgentState:
-    """
-    LangGraph node for news intelligence with complete PrimoGPT workflow.
-    """
+async def news_intelligence_agent_node(state: AgentState) -> dict:
+    """LangGraph node for news intelligence. Returns partial state updates."""
     try:
-        # Get symbol, analysis_date and technical data from previous agents
         symbol = state['symbols'][0] if state['symbols'] else 'AAPL'
         analysis_date = state['analysis_date']
         technical_data = state.get('technical_analysis_results')
-        
-        # Get company data from data collection results
         company_data = state.get('data_collection_results')
         
-        # Perform complete news analysis with company context
         result = await analyze_news(symbol, analysis_date, technical_data, company_data)
         
-        # Update state
-        state['news_intelligence_results'] = result
-        state['current_step'] = 'news_intelligence_complete'
-        
+        updates: dict = {
+            "news_intelligence_results": result,
+            "current_step": "news_intelligence_complete",
+        }
         if not result['success']:
-            state['error'] = result.get('error', 'News intelligence failed')
-            
-        return state
+            updates["error"] = result.get('error', 'News intelligence failed')
+
+        return updates
         
     except Exception as e:
         print(f"News intelligence node error: {e}")
-        state['error'] = str(e)
-        state['current_step'] = 'error'
-        return state 
+        return {"error": str(e), "current_step": "error"}

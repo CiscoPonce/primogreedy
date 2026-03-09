@@ -46,35 +46,23 @@ async def collect_data(symbol: str, analysis_date: Optional[str] = None) -> Dict
         }
 
 
-async def data_collection_agent_node(state: AgentState) -> AgentState:
-    """
-    LangGraph node for data collection.
-    
-    Args:
-        state: Current workflow state
-        
-    Returns:
-        Updated state with data collection results
-    """
+async def data_collection_agent_node(state: AgentState) -> dict:
+    """LangGraph node for data collection. Returns partial state updates."""
     try:
-        # Get first symbol from state
         symbol = state['symbols'][0] if state['symbols'] else 'AAPL'
         analysis_date = state['analysis_date']
         
-        # Collect data with analysis date
         result = await collect_data(symbol, analysis_date)
         
-        # Update state
-        state['data_collection_results'] = result
-        state['current_step'] = 'data_collection_complete'
-        
+        updates: dict = {
+            "data_collection_results": result,
+            "current_step": "data_collection_complete",
+        }
         if not result['success']:
-            state['error'] = result.get('error', 'Data collection failed')
-            
-        return state
+            updates["error"] = result.get('error', 'Data collection failed')
+
+        return updates
         
     except Exception as e:
         print(f"Data collection node error: {e}")
-        state['error'] = str(e)
-        state['current_step'] = 'error'
-        return state 
+        return {"error": str(e), "current_step": "error"}

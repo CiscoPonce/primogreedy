@@ -1,5 +1,7 @@
 from typing import Dict, Any, Optional
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import RetryPolicy
 from .state import AgentState, create_initial_state
 from ..agents.data_collection_agent import data_collection_agent_node
 from ..agents.technical_analysis_agent import technical_analysis_agent_node
@@ -7,72 +9,63 @@ from ..agents.news_intelligence_agent import news_intelligence_agent_node
 from ..agents.portfolio_manager_agent import portfolio_manager_agent_node
 
 
-def debug_state(state: AgentState, agent_name: str) -> AgentState:
-    """Debug function to log state after each agent."""
+def _log_partial(updates: dict, agent_name: str) -> None:
+    """Log interesting fields from a partial-state update dict."""
     print(f"\n{agent_name} Agent Complete:")
-    
-    # Basic info
-    analysis_date = state.get('analysis_date', 'N/A')
-    symbol = state['symbols'][0] if state.get('symbols') else 'N/A'
-    print(f"Date: {analysis_date} | Symbol: {symbol}")
-    
-    # Data Collection Results
-    data_results = state.get('data_collection_results')
-    if data_results and agent_name == "Data Collection":
-        market_data = data_results.get('market_data', {})
-        current_price = market_data.get('current_price', 'N/A')
-        print(f"Current Price: ${current_price}")
-    
-    # Technical Analysis Results
-    tech_results = state.get('technical_analysis_results')
-    if tech_results and agent_name == "Technical Analysis":
-        success = tech_results.get('success', False)
-        print(f"Technical Success: {success}")
-    
-    # News Intelligence Results
-    news_results = state.get('news_intelligence_results')
-    if news_results and agent_name == "News Intelligence":
-        success = news_results.get('success', False)
-        print(f"News Success: {success}")
-    
-    # Portfolio Manager Results
-    portfolio_results = state.get('portfolio_manager_results')
-    if portfolio_results and agent_name == "Portfolio Manager":
-        symbol_data = portfolio_results.get(symbol, {})
-        if symbol_data and symbol_data.get('success'):
-            signal = symbol_data.get('trading_signal', 'N/A')
-            confidence = symbol_data.get('confidence_level', 'N/A')
-            print(f"Signal: {signal} | Confidence: {confidence}")
-    
-    # Error state
-    if state.get('error'):
-        print(f"Error: {state.get('error')}")
-    
-    return state
+
+    if agent_name == "Data Collection":
+        data_results = updates.get('data_collection_results')
+        if data_results:
+            market_data = data_results.get('market_data', {})
+            print(f"Current Price: ${market_data.get('current_price', 'N/A')}")
+
+    elif agent_name == "Technical Analysis":
+        tech_results = updates.get('technical_analysis_results')
+        if tech_results:
+            print(f"Technical Success: {tech_results.get('success', False)}")
+
+    elif agent_name == "News Intelligence":
+        news_results = updates.get('news_intelligence_results')
+        if news_results:
+            print(f"News Success: {news_results.get('success', False)}")
+
+    elif agent_name == "Portfolio Manager":
+        portfolio_results = updates.get('portfolio_manager_results', {})
+        for sym, sym_data in portfolio_results.items():
+            if sym_data and sym_data.get('success'):
+                print(f"Signal: {sym_data.get('trading_signal', 'N/A')} | "
+                      f"Confidence: {sym_data.get('confidence_level', 'N/A')}")
+
+    if updates.get('error'):
+        print(f"Error: {updates['error']}")
 
 
-async def debug_data_collection_node(state: AgentState) -> AgentState:
+async def debug_data_collection_node(state: AgentState) -> dict:
     """Data collection node with debug output."""
-    result = await data_collection_agent_node(state)
-    return debug_state(result, "Data Collection")
+    updates = await data_collection_agent_node(state)
+    _log_partial(updates, "Data Collection")
+    return updates
 
 
-async def debug_technical_analysis_node(state: AgentState) -> AgentState:
-    """Technical analysis node with debug output.""" 
-    result = await technical_analysis_agent_node(state)
-    return debug_state(result, "Technical Analysis")
+async def debug_technical_analysis_node(state: AgentState) -> dict:
+    """Technical analysis node with debug output."""
+    updates = await technical_analysis_agent_node(state)
+    _log_partial(updates, "Technical Analysis")
+    return updates
 
 
-async def debug_news_intelligence_node(state: AgentState) -> AgentState:
+async def debug_news_intelligence_node(state: AgentState) -> dict:
     """News intelligence node with debug output."""
-    result = await news_intelligence_agent_node(state)  
-    return debug_state(result, "News Intelligence")
+    updates = await news_intelligence_agent_node(state)
+    _log_partial(updates, "News Intelligence")
+    return updates
 
 
-async def debug_portfolio_manager_node(state: AgentState) -> AgentState:
+async def debug_portfolio_manager_node(state: AgentState) -> dict:
     """Portfolio manager node with debug output."""
-    result = await portfolio_manager_agent_node(state)
-    return debug_state(result, "Portfolio Manager")
+    updates = await portfolio_manager_agent_node(state)
+    _log_partial(updates, "Portfolio Manager")
+    return updates
 
 
 def create_workflow() -> StateGraph:
@@ -83,16 +76,17 @@ def create_workflow() -> StateGraph:
         StateGraph: Configured workflow graph
     """
     # Initialize workflow
+    _api_retry = RetryPolicy(max_attempts=3, initial_interval=2.0)
+
     workflow = StateGraph(AgentState)
     
-    # Add nodes with debug output
-    workflow.add_node("data_collection", debug_data_collection_node)
-    workflow.add_node("technical_analysis", debug_technical_analysis_node)
-    workflow.add_node("news_intelligence", debug_news_intelligence_node)
-    workflow.add_node("portfolio_manager", debug_portfolio_manager_node)
+    workflow.add_node("data_collection", debug_data_collection_node, retry=_api_retry)
+    workflow.add_node("technical_analysis", debug_technical_analysis_node, retry=_api_retry)
+    workflow.add_node("news_intelligence", debug_news_intelligence_node, retry=_api_retry)
+    workflow.add_node("portfolio_manager", debug_portfolio_manager_node, retry=_api_retry)
     
     # Define linear flow
-    workflow.set_entry_point("data_collection")
+    workflow.add_edge(START, "data_collection")
     workflow.add_edge("data_collection", "technical_analysis")
     workflow.add_edge("technical_analysis", "news_intelligence")
     workflow.add_edge("news_intelligence", "portfolio_manager")
@@ -116,13 +110,14 @@ async def run_analysis(symbols: list[str], session_id: str = "default", analysis
     try:
         # Create workflow
         workflow = create_workflow()
-        app = workflow.compile()
+        app = workflow.compile(checkpointer=InMemorySaver())
         
         # Initialize state with analysis date
         initial_state = create_initial_state(session_id, symbols, analysis_date)
         
         # Run workflow
-        result = await app.ainvoke(initial_state)
+        config = {"configurable": {"thread_id": session_id}, "recursion_limit": 30}
+        result = await app.ainvoke(initial_state, config)
         
         # Extract results
         return {

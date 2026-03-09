@@ -12,8 +12,8 @@ from src.core.ticker_utils import normalize_price
 
 logger = get_logger(__name__)
 
-MAX_MARKET_CAP = 300_000_000
-MIN_MARKET_CAP = 10_000_000
+MAX_MARKET_CAP = 500_000_000
+MIN_MARKET_CAP = 5_000_000
 MAX_PRICE = 30.00
 
 # Pre-curated universe of US micro-cap-heavy indices / lists.
@@ -21,23 +21,27 @@ MAX_PRICE = 30.00
 # we maintain seed lists that get refreshed via Brave trending data.
 _SEED_POOLS: dict[str, list[str]] = {
     "USA": [
-        # Russell Micro-Cap sampling – real tickers updated periodically
-        "BSFC", "CEAD", "STRM", "GHSI", "INBS", "TTOO", "ARDS", "APRE",
-        "WBUY", "SLNH", "PKBO", "SNCE", "TPST", "EDBL", "SOPA", "RCAT",
-        "BMEA", "JCSE", "PROC", "VBLT", "ATHE", "SXTC", "REVB", "NUVB",
+        # Russell Micro-Cap sampling — audited 2026-03-05
+        "BSFC", "INBS", "TTOO", "ARDS", "APRE",
+        "WBUY", "SLNH", "TPST", "EDBL", "SOPA", "RCAT",
+        "BMEA", "JCSE", "ATHE", "SXTC", "REVB", "NUVB",
         "HNVR", "COYA", "MNTS", "GWAV", "AEHL", "REBN",
     ],
     "UK": [
-        "AFC.L", "BOTB.L", "CML.L", "DUKE.L", "FLO.L", "GAW.L",
-        "JET2.L", "KIE.L", "PURP.L", "SDI.L", "TET.L", "WINK.L",
+        # LSE micro-caps — audited 2026-03-05
+        "AFC.L", "CML.L", "DUKE.L", "FLO.L", "GAW.L",
+        "JET2.L", "KIE.L", "SDI.L", "TET.L", "WINK.L",
     ],
     "Canada": [
-        "QUIS.V", "NCI.TO", "CHE.UN.TO", "TVE.TO", "CJ.TO",
-        "BYL.V", "FPC.TO", "GBR.V", "RHC.V", "STC.V",
+        # TSX/TSXV micro-caps — audited 2026-03-05
+        "TVE.TO", "CJ.TO", "HWO.TO", "NPK.TO", "NUMI.TO",
+        "BIGG.V", "FPC.V", "ZEN.V", "STUD.V", "GIGA.V",
+        "LIO.V", "HPQ.V", "BSK.V",
     ],
     "Australia": [
+        # ASX micro-caps — audited 2026-03-05
         "VUL.AX", "PEN.AX", "LKE.AX", "NVX.AX", "RNU.AX",
-        "SYA.AX", "GL1.AX", "EMN.AX", "BRK.AX", "ADN.AX",
+        "GL1.AX", "EMN.AX", "BRK.AX", "ADN.AX",
     ],
 }
 

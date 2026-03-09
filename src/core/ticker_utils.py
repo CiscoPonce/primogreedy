@@ -21,30 +21,88 @@ NOISE_WORDS = frozenset({
     "HIGH", "ATH", "ETF", "USA", "USD", "YTD", "TOP", "HOT", "BEST", "LIVE",
     "DATA", "GDP", "CPI", "FED", "FOMC", "PCE", "PPI", "CNBC", "NYSE",
     "NASDAQ", "NEWS", "REAL", "TIME", "TODAY", "WSJ", "SEC", "WHY", "IPO",
-    "GBP", "EUR", "EPS", "FYI", "AGM",
+    "GBP", "EUR", "EPS", "FYI", "AGM", "RSI", "PE", "PB", "ROE", "ROI",
+    "API", "ETN", "OTC", "ADR", "DMA", "EMA", "SMA", "MACD", "IPO",
+    "LLC", "INC", "LTD", "PLC", "CORP", "FAQ", "PDF", "URL", "EST",
+    "PST", "UTC", "CEO", "COO", "CTO", "CFO", "CMO", "CSO",
+    "FUND", "BOND", "CASH", "DEBT", "EARN", "GAIN", "LOSS", "RISK",
+    "WEEK", "DAYS", "RATE", "MOVE", "HOLD", "CALL", "DEEP", "NEXT",
+    "HUGE", "RARE", "PICK", "ONLY", "FIND", "LIST", "MORE", "EACH",
+    "MUCH", "MANY", "SAME", "FULL", "LONG", "LOOK", "MEAN", "EVEN",
+    "BOTH", "GOOD", "WELL", "BACK", "SHOW", "HELP", "KEEP", "DOWN",
+    "TURN", "COME", "WILL", "BEEN", "WERE", "THAN", "THEM", "THEN",
+    "AMID", "PAST", "FREE", "LAST", "DOES", "WENT", "NEAR", "GAVE",
+    "RUN", "SAY", "WAY", "MAY", "HAD", "GOT", "OUR", "ITS", "HIS",
+    "HER", "ANY", "FEW", "DID", "ASK", "OWN", "OLD", "BIG", "DAY",
+    "PER", "SET", "TRY", "LET", "PUT", "END", "ADD", "PAY",
+    "OF", "OR", "IF", "IN", "ON", "AT", "TO", "UP", "BY", "SO", "NO",
+    "DO", "AS", "AN", "IS", "IT", "BE", "WE", "GO", "MY", "VS",
+    # Financial acronyms / index names that aren't tradeable tickers
+    "ROCE", "FTSE", "DJIA", "EBIT", "WACC", "CAGR", "ROIC", "REIT",
+    "SPAC", "NBER", "OPEC", "MSCI", "EMEA", "APAC", "OECD", "FIFO",
+    "FINRA", "SIPC", "FDIC", "LISA", "ISA", "ATM", "AMA", "FDA",
+    "PHNX", "IPG", "GAAP", "IFRS", "FASB", "IASB", "PCAOB",
+    "THING", "TXTW", "MRC", "HERE", "ELSE", "SURE", "WORK",
+    "SAFE", "IDEA", "PLAN", "RULE", "STEP", "PLAY", "OPEN",
+    "PART", "NOTE", "LINE", "READ", "FILL", "SIZE", "WIDE",
+    "SIGN", "RISE", "LEAD", "PUSH", "PULL", "DROP", "JUMP",
+    "AEDT", "AEST", "BEST", "FAST", "EVER", "FORM", "SENT",
+    "GROW", "MARK", "PURE", "REAL", "SOFT", "TALK", "VOTE",
+    "EU", "UK", "UN", "AI", "IT", "HR", "PR", "TV", "DC",
 })
+
+_MAX_TICKER_LEN = 8  # longest valid ticker with suffix: e.g. CHE.UN.TO
+
+
+def _find_ticker_tokens(text: str) -> list[str]:
+    """Find tokens in mixed-case text that look like stock tickers.
+
+    Only matches words that are ALREADY fully uppercase in the source —
+    real tickers in financial text are written as "AAPL" or "$MSFT" while
+    normal English words appear in mixed case.
+    """
+    cashtags = re.findall(r"\$([A-Z]{1,5})", text)
+
+    # Uppercase words bounded by non-letter chars.  The negative look-arounds
+    # ensure we skip uppercase letters inside normal words (e.g. "Apple").
+    bare = re.findall(
+        r"(?<![A-Za-z])([A-Z]{2,5}(?:\.[A-Z]{1,3})?)(?![a-zA-Z])", text
+    )
+
+    return cashtags + bare
 
 
 def extract_tickers(text: str) -> list[str]:
     """Extract plausible ticker symbols from free-form text.
 
-    Handles comma-separated LLM output, cashtags ($AAPL), and bare
-    uppercase words.  Filters out common English noise.
+    Two modes:
+      1. **Comma-separated LLM output** ("AAPL, MSFT, GOOG") — only when
+         the comma-parts are short, indicating an actual ticker list.
+      2. **Mixed-case prose** (Brave search results, articles) — scans for
+         words that are already fully uppercase, which is how tickers
+         naturally appear in financial text.
 
     Returns a deduplicated list preserving discovery order.
     """
-    cleaned = text.strip().upper()
+    cleaned = text.strip()
 
-    # Try comma-separated first (LLM extraction output)
     if "," in cleaned:
-        parts = [re.sub(r"[^A-Z.]", "", p) for p in cleaned.split(",")]
+        parts = [p.strip() for p in cleaned.split(",")]
+        short_parts = sum(1 for p in parts if len(p.split()) <= 2 and len(p) <= 12)
+
+        if short_parts > len(parts) * 0.5:
+            candidates = [re.sub(r"[^A-Z.]", "", p.upper()) for p in parts]
+        else:
+            candidates = _find_ticker_tokens(cleaned)
     else:
-        parts = re.findall(r"\b([A-Z]{2,5}(?:\.[A-Z]{1,2})?)\b", cleaned)
+        candidates = _find_ticker_tokens(cleaned)
 
     seen: set[str] = set()
     result: list[str] = []
-    for t in parts:
-        if len(t) < 2 or t in NOISE_WORDS or t in seen:
+    for t in candidates:
+        if not t or len(t) < 2 or len(t) > _MAX_TICKER_LEN:
+            continue
+        if t in NOISE_WORDS or t in seen:
             continue
         seen.add(t)
         result.append(t)
