@@ -64,6 +64,7 @@ def get_structured_llm(max_tokens: int = 65536) -> ChatOpenAI:
         base_url="https://openrouter.ai/api/v1",
         temperature=0,
         max_tokens=max_tokens,
+        request_timeout=120,
     )
 
 

@@ -1,0 +1,59 @@
+name: Portfolio Re-Evaluation
+
+on:
+  # Manual trigger with optional limit
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max US tickers to re-evaluate (0 = all)'
+        required: false
+        default: '0'
+  # Also runs daily at 14:00 UTC (after market open)
+  schedule:
+    - cron: '0 14 * * 1-5'
+
+jobs:
+  reeval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install alpaca-trade-api>=3.0 || echo "alpaca-trade-api install skipped"
+          pip install "websockets>=13.0" --force-reinstall --quiet
+
+      - name: Re-Evaluate Portfolio
+        env:
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGCHAIN_PROJECT: primogreedy
+          LANGSMITH_WORKSPACE_ID: ${{ secrets.LANGSMITH_WORKSPACE_ID }}
+          VPS_API_URL: ${{ secrets.VPS_API_URL }}
+          VPS_API_KEY: ${{ secrets.VPS_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_ENABLED: ${{ secrets.ALPACA_ENABLED }}
+          USE_DEBATE: ${{ secrets.USE_DEBATE }}
+          PROMPT_VERSION: ${{ secrets.PROMPT_VERSION || 'latest' }}
+          RESEND_API_KEY_CISCO: ${{ secrets.RESEND_API_KEY_CISCO }}
+          EMAIL_CISCO: ${{ secrets.EMAIL_CISCO }}
+        run: |
+          LIMIT="${{ github.event.inputs.limit || '0' }}"
+          PYTHONPATH=. python src/reeval_portfolio.py --limit "$LIMIT"
