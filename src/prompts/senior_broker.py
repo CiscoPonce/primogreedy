@@ -48,16 +48,23 @@ STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom li
 """
 
 
+_cached_prompt: str | None = None
+
+
 def get_analyst_prompt() -> str:
     """Return the Senior Broker prompt template string.
 
     Tries LangSmith Hub first (if LANGCHAIN_API_KEY is set), otherwise
-    returns the local fallback.
+    returns the local fallback.  Result is cached after first call.
 
     Supports ``PROMPT_VERSION`` env var for pinning to a specific Hub
     commit.  Set to "latest" (default) or a commit hash like
     "abc123def456" to lock a specific version during A/B testing.
     """
+    global _cached_prompt
+    if _cached_prompt is not None:
+        return _cached_prompt
+
     if os.getenv("LANGCHAIN_API_KEY"):
         try:
             from langsmith import Client
@@ -75,9 +82,11 @@ def get_analyst_prompt() -> str:
             messages = hub_prompt.messages
             if messages:
                 template_str = messages[0].prompt.template
-                return template_str
+                _cached_prompt = template_str
+                return _cached_prompt
         except Exception as exc:
-            logger.warning("Hub pull failed, using local fallback: %s", exc)
+            logger.debug("Hub prompt unavailable, using local template: %s", exc)
 
     logger.info("Using local Senior Broker prompt template")
-    return SENIOR_BROKER_TEMPLATE
+    _cached_prompt = SENIOR_BROKER_TEMPLATE
+    return _cached_prompt
