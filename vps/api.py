@@ -205,7 +205,11 @@ def get_portfolio(x_api_key: str = Header(...)):
     verify_key(x_api_key)
     con = get_db()
     rows = con.execute(
-        "SELECT ticker, entry_price, date, verdict, source FROM paper_portfolio ORDER BY date DESC"
+        """SELECT ticker, entry_price, date, verdict, source 
+           FROM paper_portfolio 
+           WHERE source NOT IN ('deploy-test', 'test_suite', 'vps_test', 'test', 'e2e_test', 'smoke_test')
+             AND ticker NOT LIKE 'TEST%' AND ticker != 'PYTH' AND ticker != 'GHACT'
+           ORDER BY date DESC"""
     ).fetchall()
     con.close()
 
@@ -263,7 +267,11 @@ def evaluate_portfolio(x_api_key: str = Header(...)):
     verify_key(x_api_key)
     con = get_db()
     rows = con.execute(
-        "SELECT ticker, entry_price, date, verdict, source FROM paper_portfolio ORDER BY date"
+        """SELECT ticker, entry_price, date, verdict, source 
+           FROM paper_portfolio 
+           WHERE source NOT IN ('deploy-test', 'test_suite', 'vps_test', 'test', 'e2e_test', 'smoke_test')
+             AND ticker NOT LIKE 'TEST%' AND ticker != 'PYTH' AND ticker != 'GHACT'
+           ORDER BY date"""
     ).fetchall()
     con.close()
 
@@ -332,14 +340,22 @@ def portfolio_summary(x_api_key: str = Header(...)):
     trades = con.execute(
         """SELECT ticker, entry_price, date, verdict, source,
                   position_size, order_id, fill_price, broker_status
-           FROM paper_portfolio ORDER BY date DESC"""
+           FROM paper_portfolio 
+           WHERE source NOT IN ('deploy-test', 'test_suite', 'vps_test', 'test', 'e2e_test', 'smoke_test')
+             AND ticker NOT LIKE 'TEST%' AND ticker != 'PYTH' AND ticker != 'GHACT'
+           ORDER BY date DESC"""
     ).fetchall()
 
-    seen_count = con.execute("SELECT COUNT(*) FROM seen_tickers").fetchone()[0]
+    seen_count = con.execute("""
+        SELECT COUNT(*) FROM seen_tickers
+        WHERE ticker NOT LIKE 'TEST%' AND ticker != 'PYTH' AND ticker != 'GHACT'
+    """).fetchone()[0]
 
     runs = con.execute(
         """SELECT id, ticker, timestamp, status, region
-           FROM agent_runs ORDER BY timestamp DESC LIMIT 20"""
+           FROM agent_runs 
+           WHERE ticker NOT LIKE 'TEST%' AND ticker != 'PYTH' AND ticker != 'GHACT'
+           ORDER BY timestamp DESC LIMIT 20"""
     ).fetchall()
 
     con.close()
