@@ -13,12 +13,11 @@ _llm_instance = None
 # chain-of-thought before producing output. Keep it as fallback only;
 # non-reasoning models should come first for structured-output tasks.
 MODEL_CHAIN = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
     "stepfun/step-3.5-flash:free",
+    "z-ai/glm-4.5-air:free",
     "arcee-ai/trinity-large-preview:free",
-    "google/gemma-3-27b-it:free",
+    "arcee-ai/trinity-mini:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
 ]
 
 # Best model for structured (JSON) output — must NOT be a reasoning model
