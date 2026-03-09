@@ -6,9 +6,9 @@ agents that produce a more rigorous, hallucination-resistant verdict.
 Toggle: set ``USE_DEBATE=true`` in the environment to enable.
 
 Architecture (LangGraph subgraph):
-    pitcher_node (Gemma)  -> bull_case
-    skeptic_node (Mistral) -> bear_case
-    judge_node   (Nemotron) -> InvestmentVerdict
+    pitcher_node (Qwen)   -> bull_case
+    skeptic_node (Hermes) -> bear_case
+    judge_node   (Llama)  -> InvestmentVerdict
 """
 
 import os
@@ -23,8 +23,8 @@ from src.llm import MODEL_CHAIN
 
 logger = get_logger(__name__)
 
-PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "google/gemma-3-27b-it:free")
-SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "mistralai/mistral-small-3.1-24b-instruct:free")
+PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "qwen/qwen3-coder:free")
+SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "nousresearch/hermes-3-llama-3.1-405b:free")
 JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", MODEL_CHAIN[0])
 
 # Free-tier rate limits: 8 req/min per model.
