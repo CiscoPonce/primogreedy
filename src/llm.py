@@ -48,11 +48,13 @@ def get_llm() -> ChatOpenAI:
     return _llm_instance
 
 
-def get_structured_llm(max_tokens: int = 65536) -> ChatOpenAI:
+def get_structured_llm(max_tokens: int = 8192) -> ChatOpenAI:
     """Return an LLM instance configured for structured output.
 
-    A generous ``max_tokens`` ensures reasoning models have enough
-    headroom to think and then produce the full structured JSON.
+    A moderate ``max_tokens`` gives enough headroom for the model to
+    produce a full InvestmentVerdict while preventing free-tier models
+    from burning all capacity on reasoning tokens and hitting the
+    ceiling before completing the JSON.
     """
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
