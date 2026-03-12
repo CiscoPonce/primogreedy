@@ -426,8 +426,7 @@ def portfolio_summary(x_api_key: str = Header(...)):
             "position_size": r[5], "order_id": r[6],
             "fill_price": r[7], "broker_status": r[8] or "none",
         }
-        if len(recent_trades) < 15:
-            recent_trades.append(trade_obj)
+        recent_trades.append(trade_obj)
 
     recent_runs = [
         {"id": r[0], "ticker": r[1], "timestamp": str(r[2]),
