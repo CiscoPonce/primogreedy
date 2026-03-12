@@ -574,12 +574,15 @@ tr:hover td{background:rgba(34,211,238,.04)}
   </div>
 </div>
 
-<div class="grid2">
-  <div class="panel"><h2>Recent Agent Runs</h2><ul class="activity" id="runs"></ul></div>
-  <div class="panel"><h2>Seen Tickers (Active)</h2><div id="seenInfo" style="margin-bottom:12px"></div><ul class="activity" id="seen"></ul></div>
-</div>
-
-<div class="refresh" id="refreshNote"></div>
+<footer style="text-align:center;padding:28px 0 8px;border-top:1px solid var(--bd);margin-top:32px">
+  <div style="margin-bottom:12px">
+    <a href="https://ciscoponce.github.io/primogreedy/" target="_blank" rel="noopener"
+       style="color:var(--cy);text-decoration:none;font-size:13px;font-weight:600;margin:0 16px">📄 About the Project</a>
+    <a href="https://github.com/CiscoPonce/primogreedy" target="_blank" rel="noopener"
+       style="color:var(--pu);text-decoration:none;font-size:13px;font-weight:600;margin:0 16px">⭐ GitHub Repo</a>
+  </div>
+  <div class="refresh" id="refreshNote"></div>
+</footer>
 </div>
 
 <script>
@@ -604,8 +607,7 @@ async function load() {
     renderVerdictChart(sum.by_verdict);
     renderSizingChart(sum.recent_trades);
     renderTable(sum.recent_trades, evalData);
-    renderRuns(sum.recent_runs);
-    renderSeen(seen);
+
     document.getElementById('refreshNote').textContent =
       'Last refresh: ' + new Date().toLocaleTimeString() + ' — next in 5 min';
   } catch(e) {
@@ -729,25 +731,7 @@ function verdictClass(v) {
   return 'verdict-avoid';
 }
 
-function renderRuns(runs) {
-  const el = document.getElementById('runs');
-  if (!runs || !runs.length) { el.innerHTML = '<li style="color:var(--td)">No runs recorded</li>'; return; }
-  el.innerHTML = runs.map(r =>
-    `<li><span><a class="ticker" href="https://finance.yahoo.com/quote/${r.ticker}" target="_blank">${r.ticker}</a> — ${r.status} (${r.region||'?'})</span>
-     <span class="ts">${r.timestamp?.slice(0,16)||''}</span></li>`
-  ).join('');
-}
 
-function renderSeen(seen) {
-  const tickers = Object.entries(seen).sort((a,b) => b[1]-a[1]);
-  const el = document.getElementById('seen');
-  document.getElementById('seenInfo').innerHTML =
-    `<span style="color:var(--td);font-size:13px">${tickers.length} tickers in active memory ledger</span>`;
-  el.innerHTML = tickers.slice(0, 30).map(([t, ts]) => {
-    const d = new Date(ts * 1000);
-    return `<li><a class="ticker" href="https://finance.yahoo.com/quote/${t}" target="_blank">${t}</a><span class="ts">${d.toLocaleDateString()}</span></li>`;
-  }).join('');
-}
 
 document.querySelectorAll('th[data-col]').forEach(th => {
   th.addEventListener('click', () => {
