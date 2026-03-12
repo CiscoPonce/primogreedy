@@ -229,6 +229,29 @@ def get_portfolio(x_api_key: str = Header(...)):
 def record_trade(body: TradeIn, x_api_key: str = Header(...)):
     verify_key(x_api_key)
     con = get_db()
+
+    # If this is a re-evaluation, update the existing row for this ticker
+    # instead of creating a new dated entry.
+    if body.source == "reeval_cron":
+        existing = con.execute(
+            "SELECT COUNT(*) FROM paper_portfolio WHERE ticker = ?",
+            [body.ticker],
+        ).fetchone()[0]
+        if existing > 0:
+            con.execute(
+                """UPDATE paper_portfolio
+                   SET entry_price = ?, date = ?, verdict = ?, source = ?,
+                       position_size = ?, order_id = ?, fill_price = ?,
+                       broker_status = ?, created_at = current_timestamp
+                   WHERE ticker = ?""",
+                [body.entry_price, body.date, body.verdict, body.source,
+                 body.position_size, body.order_id, body.fill_price,
+                 body.broker_status, body.ticker],
+            )
+            con.close()
+            return {"status": "updated", "ticker": body.ticker}
+
+    # Normal insert (morning cron / new discovery)
     try:
         con.execute(
             """INSERT INTO paper_portfolio
@@ -259,6 +282,34 @@ def update_trade_fill(ticker: str, body: TradeFillUpdate, x_api_key: str = Heade
     )
     con.close()
     return {"status": "ok", "ticker": ticker}
+
+
+@app.delete("/portfolio/{ticker}")
+def delete_portfolio_entry(ticker: str, x_api_key: str = Header(...)):
+    """Delete all portfolio entries for a given ticker."""
+    verify_key(x_api_key)
+    con = get_db()
+    before = con.execute("SELECT COUNT(*) FROM paper_portfolio WHERE ticker = ?", [ticker]).fetchone()[0]
+    con.execute("DELETE FROM paper_portfolio WHERE ticker = ?", [ticker])
+    con.close()
+    return {"status": "ok", "ticker": ticker, "deleted": before}
+
+
+@app.post("/portfolio/deduplicate")
+def deduplicate_portfolio(x_api_key: str = Header(...)):
+    """Keep only the most recent entry per ticker, removing older duplicates."""
+    verify_key(x_api_key)
+    con = get_db()
+    before = con.execute("SELECT COUNT(*) FROM paper_portfolio").fetchone()[0]
+    con.execute("""
+        DELETE FROM paper_portfolio
+        WHERE rowid NOT IN (
+            SELECT max(rowid) FROM paper_portfolio GROUP BY ticker
+        )
+    """)
+    after = con.execute("SELECT COUNT(*) FROM paper_portfolio").fetchone()[0]
+    con.close()
+    return {"status": "ok", "before": before, "after": after, "removed": before - after}
 
 
 @app.get("/portfolio/evaluate")
