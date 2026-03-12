@@ -230,28 +230,27 @@ def record_trade(body: TradeIn, x_api_key: str = Header(...)):
     verify_key(x_api_key)
     con = get_db()
 
-    # If this is a re-evaluation, update the existing row for this ticker
-    # instead of creating a new dated entry.
-    if body.source == "reeval_cron":
-        existing = con.execute(
-            "SELECT COUNT(*) FROM paper_portfolio WHERE ticker = ?",
-            [body.ticker],
-        ).fetchone()[0]
-        if existing > 0:
-            con.execute(
-                """UPDATE paper_portfolio
-                   SET entry_price = ?, date = ?, verdict = ?, source = ?,
-                       position_size = ?, order_id = ?, fill_price = ?,
-                       broker_status = ?, created_at = current_timestamp
-                   WHERE ticker = ?""",
-                [body.entry_price, body.date, body.verdict, body.source,
-                 body.position_size, body.order_id, body.fill_price,
-                 body.broker_status, body.ticker],
-            )
-            con.close()
-            return {"status": "updated", "ticker": body.ticker}
+    # Strict 1-entry-per-ticker: if ticker already exists, UPDATE it.
+    existing = con.execute(
+        "SELECT COUNT(*) FROM paper_portfolio WHERE ticker = ?",
+        [body.ticker],
+    ).fetchone()[0]
 
-    # Normal insert (morning cron / new discovery)
+    if existing > 0:
+        con.execute(
+            """UPDATE paper_portfolio
+               SET entry_price = ?, date = ?, verdict = ?, source = ?,
+                   position_size = ?, order_id = ?, fill_price = ?,
+                   broker_status = ?, created_at = current_timestamp
+               WHERE ticker = ?""",
+            [body.entry_price, body.date, body.verdict, body.source,
+             body.position_size, body.order_id, body.fill_price,
+             body.broker_status, body.ticker],
+        )
+        con.close()
+        return {"status": "updated", "ticker": body.ticker}
+
+    # Brand-new ticker — insert
     try:
         con.execute(
             """INSERT INTO paper_portfolio
@@ -488,40 +487,61 @@ _DASHBOARD_HTML = """\
 --gn:#34d399;--rd:#f87171;--yl:#fbbf24;--tx:#e2e8f0;--td:#94a3b8;--tw:#f8fafc}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--tx);line-height:1.5}
-.wrap{max-width:1200px;margin:0 auto;padding:24px}
+.wrap{max-width:1260px;margin:0 auto;padding:24px}
 header{display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px}
 header h1{font-size:28px;font-weight:800;letter-spacing:-1px}
-header h1 span{background:linear-gradient(135deg,var(--cy),var(--pu));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.badge{font-size:12px;padding:4px 12px;border:1px solid var(--bd);border-radius:99px;color:var(--gn);background:rgba(52,211,153,.08)}
+header h1 span{background:linear-gradient(135deg,var(--cy),var(--pu));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.badge{font-size:12px;padding:4px 14px;border:1px solid var(--bd);border-radius:99px;color:var(--gn);
+background:rgba(52,211,153,.06);backdrop-filter:blur(8px)}
 .badge .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--gn);margin-right:6px;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:32px}
-.card{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:20px}
-.card .label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--td);margin-bottom:4px}
-.card .val{font-size:32px;font-weight:700;color:var(--tw)}
-.card .sub{font-size:13px;color:var(--td);margin-top:4px}
-.card .val.green{color:var(--gn)}.card .val.red{color:var(--rd)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+/* Cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}
+.card{background:var(--s1);border:1px solid var(--bd);border-radius:14px;padding:22px;
+position:relative;overflow:hidden;transition:border-color .3s,transform .3s;animation:fadeUp .4s ease-out both}
+.card:hover{border-color:var(--cy);transform:translateY(-2px)}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+background:linear-gradient(90deg,var(--cy),var(--pu),var(--gn));opacity:.6}
+.card:nth-child(1){animation-delay:.05s}.card:nth-child(2){animation-delay:.1s}
+.card:nth-child(3){animation-delay:.15s}.card:nth-child(4){animation-delay:.2s}
+.card:nth-child(5){animation-delay:.25s}
+.card .label{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--td);margin-bottom:6px;font-weight:600}
+.card .val{font-size:34px;font-weight:800;color:var(--tw);letter-spacing:-1px}
+.card .sub{font-size:12px;color:var(--td);margin-top:6px}
+.card .val.green{background:linear-gradient(135deg,#34d399,#2dd4bf);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.card .val.red{color:var(--rd)}
+
+/* Panels */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:32px}
-@media(max-width:768px){.grid2{grid-template-columns:1fr}}
-.panel{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:24px}
-.panel h2{font-size:16px;margin-bottom:16px;color:var(--tw)}
+@media(max-width:768px){.grid2{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}}
+.panel{background:var(--s1);border:1px solid var(--bd);border-radius:14px;padding:24px;animation:fadeUp .5s ease-out both}
+.panel h2{font-size:15px;margin-bottom:16px;color:var(--tw);font-weight:700;letter-spacing:-.3px}
 canvas{max-height:260px}
+
+/* Table */
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:10px 12px;border-bottom:1px solid var(--bd);color:var(--td);font-weight:600;
-text-transform:uppercase;letter-spacing:.5px;font-size:11px;cursor:pointer;user-select:none}
+th{text-align:left;padding:10px 12px;border-bottom:2px solid var(--bd);color:var(--td);font-weight:700;
+text-transform:uppercase;letter-spacing:.8px;font-size:10px;cursor:pointer;user-select:none;transition:color .2s}
 th:hover{color:var(--cy)}
-td{padding:10px 12px;border-bottom:1px solid rgba(30,41,59,.5)}
-tr:hover td{background:rgba(34,211,238,.03)}
-.ticker{font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--cy)}
-.verdict-buy{color:var(--gn);font-weight:600}.verdict-watch{color:var(--yl);font-weight:600}
-.verdict-avoid{color:var(--rd);font-weight:600}.verdict-strong{color:#2dd4bf;font-weight:700}
-.gain-pos{color:var(--gn)}.gain-neg{color:var(--rd)}
-.broker-filled{color:var(--gn);font-size:11px}.broker-pending{color:var(--yl);font-size:11px}
+th.sorted::after{content:' ▾';color:var(--cy)}
+th.sorted.asc::after{content:' ▴'}
+td{padding:10px 12px;border-bottom:1px solid rgba(30,41,59,.4)}
+tr:hover td{background:rgba(34,211,238,.04)}
+.ticker{font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--cy);text-decoration:none;transition:color .2s}
+.ticker:hover{color:var(--pu)}
+.verdict-buy{color:var(--gn);font-weight:700}.verdict-watch{color:var(--yl);font-weight:700}
+.verdict-avoid{color:var(--rd);font-weight:700}.verdict-strong{color:#2dd4bf;font-weight:800}
+.gain-pos{color:var(--gn);font-weight:600}.gain-neg{color:var(--rd);font-weight:600}
+.broker-filled{color:var(--gn);font-size:11px;font-weight:600}.broker-pending{color:var(--yl);font-size:11px}
 .broker-none{color:var(--td);font-size:11px}
+
+/* Activity */
 .activity{list-style:none;max-height:320px;overflow-y:auto}
-.activity li{padding:8px 0;border-bottom:1px solid rgba(30,41,59,.4);font-size:13px;display:flex;justify-content:space-between}
+.activity li{padding:8px 0;border-bottom:1px solid rgba(30,41,59,.3);font-size:13px;display:flex;justify-content:space-between;align-items:center}
 .activity .ts{color:var(--td);font-size:11px;font-family:'JetBrains Mono',monospace}
-.refresh{font-size:11px;color:var(--td);text-align:center;margin-top:24px}
+.refresh{font-size:11px;color:var(--td);text-align:center;margin-top:24px;padding:16px 0;border-top:1px solid var(--bd)}
 .loading{text-align:center;padding:40px;color:var(--td)}
 </style>
 </head>
@@ -536,16 +556,17 @@ tr:hover td{background:rgba(34,211,238,.03)}
 
 <div class="grid2">
   <div class="panel"><h2>Verdict Distribution</h2><canvas id="verdictChart"></canvas></div>
-  <div class="panel"><h2>Position Sizing</h2><canvas id="sizingChart"></canvas></div>
+  <div class="panel"><h2>Position Sizing (Kelly %)</h2><canvas id="sizingChart"></canvas></div>
 </div>
 
 <div class="panel" style="margin-bottom:32px">
-  <h2>Portfolio</h2>
+  <h2>Portfolio — <span id="tradeCount" style="color:var(--td);font-weight:400;font-size:13px"></span></h2>
   <div style="overflow-x:auto">
     <table id="portfolioTable">
       <thead><tr>
         <th data-col="ticker">Ticker</th><th data-col="date">Date</th>
-        <th data-col="entry_price">Entry</th><th data-col="verdict">Verdict</th>
+        <th data-col="entry_price">Entry</th><th data-col="current">Now</th>
+        <th data-col="gain_pct">P/L</th><th data-col="verdict">Verdict</th>
         <th data-col="position_size">Kelly %</th><th data-col="broker_status">Broker</th>
         <th data-col="source">Source</th>
       </tr></thead>
@@ -566,19 +587,24 @@ tr:hover td{background:rgba(34,211,238,.03)}
 const API_KEY = '""" + API_KEY + """';
 const H = {'X-API-Key': API_KEY};
 let sortCol = 'date', sortAsc = false;
+let evalData = [];
 
 async function load() {
   try {
-    const [sumR, seenR] = await Promise.all([
+    const [sumR, seenR, evalR] = await Promise.all([
       fetch('/portfolio/summary', {headers: H}),
-      fetch('/seen-tickers', {headers: H})
+      fetch('/seen-tickers', {headers: H}),
+      fetch('/portfolio/evaluate', {headers: H})
     ]);
     const sum = await sumR.json();
     const seen = await seenR.json();
-    renderCards(sum, seen);
+    const evalResult = await evalR.json();
+    evalData = evalResult.trades || [];
+
+    renderCards(sum, seen, evalResult);
     renderVerdictChart(sum.by_verdict);
     renderSizingChart(sum.recent_trades);
-    renderTable(sum.recent_trades);
+    renderTable(sum.recent_trades, evalData);
     renderRuns(sum.recent_runs);
     renderSeen(seen);
     document.getElementById('refreshNote').textContent =
@@ -589,21 +615,28 @@ async function load() {
   }
 }
 
-function renderCards(sum, seen) {
+function renderCards(sum, seen, ev) {
   const buys = (sum.by_verdict['BUY']||0) + (sum.by_verdict['STRONG BUY']||0);
   const avoids = sum.by_verdict['AVOID']||0;
   const watches = sum.by_verdict['WATCH']||0;
   const seenCount = Object.keys(seen).length;
+  const avgReturn = ev.avg_return !== undefined ? ev.avg_return : 0;
+  const winRate = ev.win_rate !== undefined ? ev.win_rate : 0;
+  const returnClass = avgReturn >= 0 ? 'green' : 'red';
+  const returnSign = avgReturn >= 0 ? '+' : '';
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Total Trades</div><div class="val">${sum.total_trades}</div>
-      <div class="sub">${buys} buys, ${watches} watch, ${avoids} avoid</div></div>
+      <div class="sub">${buys} buys · ${watches} watch · ${avoids} avoid</div></div>
     <div class="card"><div class="label">Buy Rate</div>
       <div class="val green">${sum.total_trades ? Math.round(buys/sum.total_trades*100) : 0}%</div>
       <div class="sub">${buys} actionable of ${sum.total_trades}</div></div>
+    <div class="card"><div class="label">Avg Return</div>
+      <div class="val ${returnClass}">${returnSign}${avgReturn.toFixed(1)}%</div>
+      <div class="sub">Win rate: ${winRate.toFixed(0)}%</div></div>
     <div class="card"><div class="label">Seen Tickers</div><div class="val">${seenCount}</div>
-      <div class="sub">Active in ledger</div></div>
+      <div class="sub">Active in memory ledger</div></div>
     <div class="card"><div class="label">Sources</div><div class="val">${Object.keys(sum.by_source).length}</div>
-      <div class="sub">${Object.entries(sum.by_source).map(([k,v])=>k+': '+v).join(', ')}</div></div>`;
+      <div class="sub">${Object.entries(sum.by_source).map(([k,v])=>k+': '+v).join(' · ')}</div></div>`;
 }
 
 let vChart, sChart;
@@ -613,7 +646,7 @@ function renderVerdictChart(bv) {
   if (vChart) vChart.destroy();
   vChart = new Chart(document.getElementById('verdictChart'), {
     type:'doughnut', data:{labels, datasets:[{data, backgroundColor:colors, borderWidth:0}]},
-    options:{plugins:{legend:{labels:{color:'#94a3b8',font:{size:12}}}},cutout:'60%'}
+    options:{plugins:{legend:{labels:{color:'#94a3b8',font:{size:12}}}},cutout:'65%'}
   });
 }
 
@@ -627,30 +660,62 @@ function renderSizingChart(trades) {
   });
   if (sChart) sChart.destroy();
   sChart = new Chart(document.getElementById('sizingChart'), {
-    type:'bar', data:{labels, datasets:[{label:'Kelly %', data, backgroundColor:colors, borderRadius:4}]},
+    type:'bar', data:{labels, datasets:[{label:'Kelly %', data, backgroundColor:colors, borderRadius:6}]},
     options:{plugins:{legend:{display:false}},scales:{
       x:{ticks:{color:'#94a3b8',font:{size:10}},grid:{display:false}},
-      y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'rgba(30,41,59,.5)'}}
+      y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'rgba(30,41,59,.4)'}}
     }}
   });
 }
 
-function renderTable(trades) {
-  const sorted = [...trades].sort((a,b) => {
+function renderTable(trades, evals) {
+  // Merge eval data (current price + gain) into trades
+  const evalMap = {};
+  evals.forEach(e => { evalMap[e.ticker] = e; });
+
+  const merged = trades.map(t => {
+    const ev = evalMap[t.ticker] || {};
+    return {...t, current: ev.current || null, gain_pct: ev.gain_pct !== undefined ? ev.gain_pct : null};
+  });
+
+  const sorted = [...merged].sort((a,b) => {
     let av = a[sortCol], bv = b[sortCol];
+    if (av === null || av === undefined) av = -9999;
+    if (bv === null || bv === undefined) bv = -9999;
     if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv||'').toLowerCase(); }
     if (av < bv) return sortAsc ? -1 : 1;
     if (av > bv) return sortAsc ? 1 : -1;
     return 0;
   });
+
+  document.getElementById('tradeCount').textContent = sorted.length + ' positions';
+
+  // Update sort indicators
+  document.querySelectorAll('th[data-col]').forEach(th => {
+    th.classList.remove('sorted','asc');
+    if (th.dataset.col === sortCol) {
+      th.classList.add('sorted');
+      if (sortAsc) th.classList.add('asc');
+    }
+  });
+
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = sorted.map(t => {
     const vc = verdictClass(t.verdict);
     const bc = t.broker_status === 'filled' ? 'broker-filled' :
-               t.broker_status === 'none' ? 'broker-none' : 'broker-pending';
+               t.broker_status === 'none' ? 'broker-none' : 'broker-pending';  
+    const currentStr = t.current !== null ? '$'+t.current.toFixed(2) : '—';
+    const gainStr = t.gain_pct !== null
+      ? `<span class="${t.gain_pct >= 0 ? 'gain-pos' : 'gain-neg'}">${t.gain_pct >= 0 ? '+' : ''}${t.gain_pct.toFixed(1)}%</span>`
+      : '—';
+    const yf = t.ticker.includes('.') ? t.ticker : t.ticker;
     return `<tr>
-      <td class="ticker">${t.ticker}</td><td>${t.date}</td>
-      <td>$${t.entry_price.toFixed(2)}</td><td class="${vc}">${t.verdict}</td>
+      <td><a class="ticker" href="https://finance.yahoo.com/quote/${yf}" target="_blank" rel="noopener">${t.ticker}</a></td>
+      <td>${t.date}</td>
+      <td>$${t.entry_price.toFixed(2)}</td>
+      <td>${currentStr}</td>
+      <td>${gainStr}</td>
+      <td class="${vc}">${t.verdict}</td>
       <td>${t.position_size > 0 ? t.position_size.toFixed(1)+'%' : '—'}</td>
       <td class="${bc}">${t.broker_status||'none'}</td>
       <td>${t.source}</td></tr>`;
@@ -667,9 +732,9 @@ function verdictClass(v) {
 
 function renderRuns(runs) {
   const el = document.getElementById('runs');
-  if (!runs || !runs.length) { el.innerHTML = '<li>No runs recorded</li>'; return; }
+  if (!runs || !runs.length) { el.innerHTML = '<li style="color:var(--td)">No runs recorded</li>'; return; }
   el.innerHTML = runs.map(r =>
-    `<li><span><span class="ticker">${r.ticker}</span> — ${r.status} (${r.region||'?'})</span>
+    `<li><span><a class="ticker" href="https://finance.yahoo.com/quote/${r.ticker}" target="_blank">${r.ticker}</a> — ${r.status} (${r.region||'?'})</span>
      <span class="ts">${r.timestamp?.slice(0,16)||''}</span></li>`
   ).join('');
 }
@@ -678,10 +743,10 @@ function renderSeen(seen) {
   const tickers = Object.entries(seen).sort((a,b) => b[1]-a[1]);
   const el = document.getElementById('seen');
   document.getElementById('seenInfo').innerHTML =
-    `<span style="color:var(--td);font-size:13px">${tickers.length} tickers in active ledger</span>`;
+    `<span style="color:var(--td);font-size:13px">${tickers.length} tickers in active memory ledger</span>`;
   el.innerHTML = tickers.slice(0, 30).map(([t, ts]) => {
     const d = new Date(ts * 1000);
-    return `<li><span class="ticker">${t}</span><span class="ts">${d.toLocaleDateString()}</span></li>`;
+    return `<li><a class="ticker" href="https://finance.yahoo.com/quote/${t}" target="_blank">${t}</a><span class="ts">${d.toLocaleDateString()}</span></li>`;
   }).join('');
 }
 
@@ -698,5 +763,4 @@ load();
 setInterval(load, 5 * 60 * 1000);
 </script>
 </body>
-</html>
-"""
+</html>"""
