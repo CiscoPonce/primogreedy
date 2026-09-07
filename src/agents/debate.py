@@ -23,8 +23,8 @@ from src.llm import MODEL_CHAIN
 
 logger = get_logger(__name__)
 
-PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "arcee-ai/trinity-large-preview:free")
-SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "z-ai/glm-4.5-air:free")
+PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", MODEL_CHAIN[0])
 
 # Free-tier rate limits: 8 req/min per model.

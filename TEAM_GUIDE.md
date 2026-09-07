@@ -152,12 +152,11 @@ All keys are stored as GitHub Secrets for the cron job and in `.env` for local d
 
 The system uses free models via OpenRouter. If one model is rate-limited (429 error), it automatically tries the next:
 
-1. `nvidia/nemotron-3-nano-30b-a3b` (primary — fast, reliable)
-2. `stepfun/step-3.5-flash`
-3. `arcee-ai/trinity-large-preview`
-4. `google/gemma-3-27b-it`
-5. `meta-llama/llama-3.3-70b-instruct`
-6. `mistralai/mistral-small-3.1-24b-instruct`
+1. `nvidia/nemotron-3.5-lightning` (primary — fast, reliable, tool-calling)
+2. `nvidia/nemotron-3-super-120b-a12b`
+3. `dots-studio/dots-3-note-preview`
+4. `inclusionai/ling-3.0-flash-sante`
+5. `openrouter/free` (router catch-all)
 
 ---
 

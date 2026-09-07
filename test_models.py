@@ -7,11 +7,11 @@ load_dotenv()
 api_key = os.getenv("OPENROUTER_API_KEY")
 
 models_to_test = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "qwen/qwen3-coder:free",
-    "google/gemma-3-27b-it:free"
+    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "dots-studio/dots-3-note-preview:free",
+    "inclusionai/ling-3.0-flash-sante:free",
+    "openrouter/free"
 ]
 
 prompt = "Extract a stock ticker from this text: Apple is launching new iPhones. I am buying AAPL calls tomorrow. Reply only with the ticker."

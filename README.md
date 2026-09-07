@@ -33,7 +33,7 @@ START --> initial_routing --> [chat] --> END
    - Zombie Filter: rejects unprofitable companies with < 6 months cash runway
    - Routes directly to `analyst` (PASS / retries exhausted) or back to `scout` (FAIL) via `Command`.
 3. **Analyst Node** — Two modes controlled by `USE_DEBATE` env var:
-   - **Single-LLM** (default): Senior Broker analysis via OpenRouter (6-model fallback chain) with structured `InvestmentVerdict` output.
+   - **Single-LLM** (default): Senior Broker analysis via OpenRouter (5-model fallback chain) with structured `InvestmentVerdict` output.
    - **Multi-Agent Debate** (`USE_DEBATE=true`): Three-agent Investment Committee subgraph (Pitcher → Skeptic → Judge) that produces a hallucination-resistant verdict.
 
    Both modes fetch **SEC EDGAR** 10-K/10-Q filings (US equities), call Finnhub tools for deep fundamentals, and compute **Kelly Criterion position sizing**.
@@ -51,7 +51,7 @@ A linear 4-node pipeline for deep single-ticker analysis (used by `main.py` CLI)
 When `USE_DEBATE=true`, the analyst node runs a 3-agent LangGraph subgraph:
 
 ```
-START --> [pitcher (Gemma)] --> [skeptic (Mistral)] --> [judge (Nemotron)] --> END
+START --> [pitcher (Nemotron 3.5)] --> [skeptic (Nemotron Super)] --> [judge (Nemotron 3.5)] --> END
 ```
 
 1. **The Pitcher** — Writes the strongest bullish thesis using only provided data.
@@ -196,7 +196,7 @@ pip install -r requirements.txt
 
 ### 2. Configuration (`.env`)
 ```env
-OPENROUTER_API_KEY=your_key       # LLM Inference (6-model fallback chain)
+OPENROUTER_API_KEY=your_key       # LLM Inference (5-model fallback chain)
 FINNHUB_API_KEY=your_key          # Deep Fundamentals & Insider Data
 BRAVE_API_KEY=your_key            # Web Search
 RESEND_API_KEY_CISCO=your_key     # Email Reporting (Cron only)
@@ -255,7 +255,7 @@ primogreedy/
 ├── src/
 │   ├── agent.py                    # Interactive Chainlit pipeline (scout/gatekeeper/analyst)
 │   ├── whale_hunter.py             # Daily cron pipeline + parallel Send orchestrator
-│   ├── llm.py                      # OpenRouter LLM with 6-model fallback + structured output
+│   ├── llm.py                      # OpenRouter LLM with 5-model fallback + structured output
 │   ├── sec_edgar.py                # SEC EDGAR 10-K/10-Q filing fetcher + parser (@tool)
 │   ├── finance_tools.py            # Finnhub tools (@tool decorated)
 │   ├── portfolio_tracker.py        # Paper trade recording + Alpaca execution

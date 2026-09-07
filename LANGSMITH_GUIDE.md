@@ -44,7 +44,7 @@ Test prompts interactively against different models and inputs.
 3. Configure OpenRouter:
    - **Base URL:** `https://openrouter.ai/api/v1`
    - **API Key:** your `OPENROUTER_API_KEY`
-   - **Model:** e.g. `google/gemma-3-27b-it:free`
+   - **Model:** e.g. `nvidia/nemotron-3.5-lightning:free`
 4. Fill in template variables (`ticker`, `price`, `eps`, etc.)
 5. Click **Run** to test
 
@@ -79,8 +79,8 @@ Find specific model failures or fallback events.
 1. Go to `Tracing` → `primogreedy`
 2. Click `+ Add filter` → `Tags`
 3. Examples:
-   - `model:google/gemma-3-27b-it:free` — all calls to Gemma
-   - `model:nvidia/nemotron-3-nano-30b-a3b:free` — primary model calls
+   - `model:nvidia/nemotron-3.5-lightning:free` — primary model calls
+   - `model:nvidia/nemotron-3-super-120b-a12b:free` — fallback model calls
    - Filter by `Error` column to find 429 rate limits
 
 ---
