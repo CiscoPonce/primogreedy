@@ -20,10 +20,10 @@ MODEL_CHAIN = [
     "openrouter/free",
 ]
 
-# Best model for structured (JSON) output. Nemotron 3.5 Lightning handles
-# function/tool calls cleanly (finish_reason=tool_calls), which is what
-# `with_structured_output` relies on for valid InvestmentVerdict JSON.
-STRUCTURED_MODEL = "nvidia/nemotron-3.5-lightning:free"
+# Best model for structured (JSON) output. Dots3 Note is non-reasoning and
+# handles function/tool calls + JSON cleanly, so it does not waste completion
+# tokens on internal chain-of-thought — important for strict verdict parsing.
+STRUCTURED_MODEL = "dots-studio/dots-3-note-preview:free"
 
 
 def get_llm() -> ChatOpenAI:
