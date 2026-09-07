@@ -365,12 +365,21 @@ def analyst_node(state):
 
 
 def email_node(state):
-    """Send the analysis or failure report to the team."""
+    """Send the analysis, no-candidate, or crash report to the team."""
     region = state.get("region", "Global")
     ticker = state.get("ticker", "Unknown")
-    verdict = state.get("final_verdict", "No Verdict")
+    verdict = state.get("final_verdict") or "No Verdict"
+    crash_error = state.get("error", "")
 
-    if not state.get("is_small_cap"):
+    if crash_error or verdict.startswith("Pipeline crashed"):
+        logger.info("Sending crash report for %s...", region)
+        subject = f"Hunt Failed: {region} (Pipeline Crash)"
+        body = (
+            f"<h1>Hunt Failed: {region}</h1>"
+            f"<p>The PrimoGreedy pipeline crashed before completing.</p>"
+            f"<pre>{(crash_error or verdict)}</pre>"
+        )
+    elif not state.get("is_small_cap"):
         logger.info("Sending failure report for %s...", region)
         subject = f"Hunt Failed: {region}"
         body = f"Found no suitable micro-caps under ${MAX_PRICE_PER_SHARE} in {region} after {MAX_RETRIES + 1} attempts."
@@ -451,6 +460,16 @@ def hunt_region(state) -> dict:
         return {"region_results": [{"region": region, "success": True}]}
     except Exception as exc:
         logger.error("Error in %s: %s", region, exc, exc_info=True)
+        try:
+            email_node({
+                "region": region,
+                "ticker": "Error",
+                "final_verdict": f"Pipeline crashed for {region}: {exc}",
+                "is_small_cap": False,
+                "error": str(exc),
+            })
+        except Exception as email_exc:
+            logger.error("Email node also failed for %s: %s", region, email_exc)
         return {"region_results": [{"region": region, "success": False, "error": str(exc)}]}
 
 
