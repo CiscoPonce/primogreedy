@@ -65,7 +65,7 @@ def catalyst_grounding_score(run, example) -> dict:
         from langchain_openai import ChatOpenAI
 
         judge_llm = ChatOpenAI(
-            model=os.getenv("EVAL_MODEL", "nvidia/nemotron-3-nano-30b-a3b:free"),
+            model=os.getenv("EVAL_MODEL", "nvidia/nemotron-3.5-lightning:free"),
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             temperature=0,
@@ -121,7 +121,7 @@ def company_identity_score(run, example) -> dict:
         import json
 
         judge_llm = ChatOpenAI(
-            model=os.getenv("EVAL_MODEL", "nvidia/nemotron-3-nano-30b-a3b:free"),
+            model=os.getenv("EVAL_MODEL", "nvidia/nemotron-3.5-lightning:free"),
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             temperature=0,

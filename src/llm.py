@@ -8,21 +8,22 @@ load_dotenv()
 
 _llm_instance = None
 
-# Ordered by preference: quality + reliability + speed
-# NOTE: Nemotron is a *reasoning* model — it burns tokens on internal
-# chain-of-thought before producing output. Keep it as fallback only;
-# non-reasoning models should come first for structured-output tasks.
+# Ordered by preference: quality + reliability + speed.
+# All entries verified available on the OpenRouter free tier (checked 2026-09).
+# `openrouter/free` is the router catch-all, so even if the specific free
+# models above get de-listed or rate-limited, the chain can still complete.
 MODEL_CHAIN = [
-    "stepfun/step-3.5-flash:free",
-    "z-ai/glm-4.5-air:free",
-    "arcee-ai/trinity-large-preview:free",
-    "arcee-ai/trinity-mini:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "dots-studio/dots-3-note-preview:free",
+    "inclusionai/ling-3.0-flash-sante:free",
+    "openrouter/free",
 ]
 
-# Best model for structured (JSON) output — must NOT be a reasoning model
-# which wastes completion tokens on internal chain-of-thought.
-STRUCTURED_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+# Best model for structured (JSON) output. Nemotron 3.5 Lightning handles
+# function/tool calls cleanly (finish_reason=tool_calls), which is what
+# `with_structured_output` relies on for valid InvestmentVerdict JSON.
+STRUCTURED_MODEL = "nvidia/nemotron-3.5-lightning:free"
 
 
 def get_llm() -> ChatOpenAI:
