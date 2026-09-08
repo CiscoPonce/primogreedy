@@ -15,7 +15,7 @@ on:
 jobs:
   reeval:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     permissions:
       contents: write
