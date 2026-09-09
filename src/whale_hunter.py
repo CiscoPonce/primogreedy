@@ -361,6 +361,8 @@ def analyst_node(state):
                 enterprise_value=ev,
             )
             result = debate_result["_structured_result"]
+            if result is None:
+                raise RuntimeError("Debate returned no structured verdict")
 
             stats = get_kelly_stats()
             result.position_size = calculate_position_size(stats, result.verdict)

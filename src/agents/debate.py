@@ -5,13 +5,21 @@ agents that produce a more rigorous, hallucination-resistant verdict.
 
 Toggle: set ``USE_DEBATE=true`` in the environment to enable.
 
-Architecture (LangGraph subgraph):
-    pitcher_node (Trinity) -> bull_case
-    skeptic_node (GLM)     -> bear_case
-    judge_node   (StepFun) -> InvestmentVerdict
+Architecture (LangGraph subgraph) — three DISTINCT role models:
+    pitcher_node (Nemotron 3.5)       -> bull_case
+    skeptic_node (Nemotron Super)     -> bear_case
+    judge_node   (Dots3 Note)         -> InvestmentVerdict
+
+The judge is resilient: it retries each structured-output model on empty
+responses / transient errors, walks a fallback chain of structured-capable
+models, and only as a last resort parses a plain-LLM JSON response.  If every
+path fails it raises so the caller can fall back to the single-LLM analyst.
 """
 
 import os
+import json
+import re
+import time
 import warnings
 from typing import TypedDict
 
@@ -20,12 +28,15 @@ from langgraph.types import RetryPolicy
 
 from src.core.logger import get_logger
 from src.llm import MODEL_CHAIN
+from src.models.verdict import InvestmentVerdict
 
 logger = get_logger(__name__)
 
 PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3.5-lightning:free")
 SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", MODEL_CHAIN[0])
+# Judge is the structured-output role; default to the dedicated non-reasoning
+# JSON model so it stays DISTINCT from pitcher and skeptic by default.
+JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", "dots-studio/dots-3-note-preview:free")
 
 # Free-tier rate limits: 8 req/min per model.
 # Add delays between debate LLM calls to avoid 429s.
@@ -56,6 +67,7 @@ class DebateState(TypedDict, total=False):
     bull_case: str
     bear_case: str
     final_verdict: str
+    _structured_result: InvestmentVerdict
 
 
 _CURRENCY_SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "CAD": "C$", "AUD": "A$"}
@@ -117,14 +129,17 @@ def _make_llm(model: str, max_tokens: int = 2048):
 
 
 def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
-    import time
     time.sleep(_DEBATE_DELAY)  # Initial spacing
 
     llm = _make_llm(model)
     # Try primary model with backoff
     for attempt in range(4):
         try:
-            return llm.invoke(prompt).content
+            content = llm.invoke(prompt).content
+            if content:  # Guard against empty completions
+                return content
+            logger.warning("Empty response from %s (attempt %d); retrying...", model, attempt + 1)
+            time.sleep(5)
         except Exception as exc:
             if "429" in str(exc):
                 sleep_time = 15 * (attempt + 1)
@@ -141,13 +156,16 @@ def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
     fallback = _make_llm(fallback_model)
     for attempt in range(3):
         try:
-            return fallback.invoke(prompt).content
+            content = fallback.invoke(prompt).content
+            if content:
+                return content
+            time.sleep(5)
         except Exception as exc:
             if "429" in str(exc):
                 time.sleep(20)
             else:
                 time.sleep(5)
-                
+
     raise RuntimeError(f"Both {model} and {fallback_model} failed due to rate limits.")
 
 
@@ -238,20 +256,23 @@ def skeptic_node(state: DebateState) -> dict:
 # Node 3 — The Judge (final verdict with structured output)
 # ---------------------------------------------------------------------------
 
-def judge_node(state: DebateState) -> dict:
-    """Synthesise the debate into a structured InvestmentVerdict."""
-    from src.models.verdict import InvestmentVerdict
-    from src.llm import get_structured_llm
+# Judge model chain: prefer the dedicated structured model, then the broader
+# model chain as structured-output fallbacks (arranged by preference).
+def _judge_model_chain() -> list[str]:
+    chain = [JUDGE_MODEL]
+    for m in MODEL_CHAIN:
+        if m not in chain:
+            chain.append(m)
+    return chain
 
+
+def _judge_prompt(state: DebateState) -> str:
+    """Build the judge prompt (shared by structured and plain-text paths)."""
     ticker = state.get("ticker", "")
     company = state.get("company_name", ticker)
     bull_case = state.get("bull_case", "")
     bear_case = state.get("bear_case", "")
     sec = state.get("sec_context", "")
-    price = state.get("price", 0)
-    eps = state.get("eps", 0)
-    bv = state.get("book_value", 0)
-    ebitda = state.get("ebitda", 0)
     strategy = state.get("strategy", "GRAHAM CLASSIC")
 
     prompt = (
@@ -270,24 +291,125 @@ def judge_node(state: DebateState) -> dict:
         "2. Weight data-backed arguments more heavily\n"
         "3. Use strict " + strategy + " math for the quantitative base\n"
         "4. Your verdict must be one of: STRONG BUY, BUY, WATCH, AVOID\n\n"
-        "Produce a structured investment memo with:\n"
-        "- quantitative_base: Price vs valuation math\n"
-        "- lynch_pitch: The best data-backed catalyst\n"
-        "- munger_invert: The key risk from the bear case\n"
-        "- verdict: Your final call\n"
-        "- bottom_line: One sentence summary"
+        "Produce a structured investment memo with EXACTLY these fields:\n"
+        '- "quantitative_base": Price vs calculated valuation, margin of safety math\n'
+        '- "lynch_pitch": The best data-backed catalyst\n'
+        '- "munger_invert": The key risk from the bear case\n'
+        '- "verdict": One of STRONG BUY, BUY, WATCH, AVOID\n'
+        '- "bottom_line": One sentence summary\n'
+        "Return ONLY a valid JSON object with those five keys and nothing else."
+    )
+    return prompt
+
+
+def _structured_verdict_invoke(prompt: str):
+    """Try the judge models for a structured InvestmentVerdict with retries.
+
+    Returns an ``InvestmentVerdict`` or ``None`` if every model/attempt fails.
+    Empty (None) structured responses and rate limits are retried per model;
+    unavailable models are skipped via the fallback chain.
+    """
+    from src.models.verdict import InvestmentVerdict
+
+    for idx, model in enumerate(_judge_model_chain()):
+        try:
+            llm = _make_llm(model, max_tokens=4096).with_structured_output(InvestmentVerdict)
+        except Exception as exc:
+            logger.warning("Model %s cannot emit structured output: %s", model, exc)
+            continue
+
+        for attempt in range(3):
+            try:
+                time.sleep(_DEBATE_DELAY)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+                    result = llm.invoke(prompt)
+                if result is not None:
+                    return result
+                logger.warning(
+                    "Judge model %s returned empty verdict (attempt %d); retrying...",
+                    model, attempt + 1,
+                )
+            except Exception as exc:
+                err = str(exc)
+                if "429" in err:
+                    sleep_time = 20 * (attempt + 1)
+                    logger.warning("Rate limit on judge model %s; sleeping %ds...", model, sleep_time)
+                    time.sleep(sleep_time)
+                elif "404" in err or "too short" in err or "does not have" in err:
+                    logger.warning("Judge model %s unavailable, moving to fallback", model)
+                    break  # move to next model in chain
+                else:
+                    logger.warning("Judge model %s error (attempt %d): %s", model, attempt + 1, exc)
+                    time.sleep(5)
+
+    return None
+
+
+def _verdict_from_plain_json(prompt: str):
+    """Last-resort judge: ask any surviving model for pure JSON and parse it.
+
+    Returns an ``InvestmentVerdict`` or ``None`` if parsing fails.
+    """
+    from src.models.verdict import InvestmentVerdict
+
+    json_prompt = (
+        prompt
+        + "\n\nIMPORTANT: Respond with ONLY a single JSON object — no markdown "
+        + "fences, no commentary. Example shape: "
+        + '{"quantitative_base": "...", "lynch_pitch": "...", "munger_invert": "...", '
+        + '"verdict": "WATCH", "bottom_line": "..."}.'
     )
 
-    structured_llm = get_structured_llm(max_tokens=4096).with_structured_output(
-        InvestmentVerdict
-    )
+    last_error = None
+    for model in _judge_model_chain():
+        try:
+            time.sleep(_DEBATE_DELAY)
+            raw = _make_llm(model, max_tokens=4096).invoke(json_prompt).content
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Plain-JSON judge model %s failed: %s", model, exc)
+            continue
+        if not raw:
+            continue
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
-        result = structured_llm.invoke(prompt)
+        # Strip markdown fences if the model wrapped the JSON anyway.
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        try:
+            data = json.loads(cleaned)
+            return InvestmentVerdict(**data)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Could not parse judge JSON from %s: %s", model, exc)
+
+    logger.error("All plain-JSON judge attempts failed: %s", last_error)
+    return None
+
+
+def judge_node(state: DebateState) -> dict:
+    """Synthesise the debate into a structured InvestmentVerdict."""
+    from src.models.verdict import InvestmentVerdict
+
+    ticker = state.get("ticker", "")
+    strategy = state.get("strategy", "GRAHAM CLASSIC")
+    prompt = _judge_prompt(state)
+
+    result = _structured_verdict_invoke(prompt)
+
+    if result is None:
+        logger.warning("All structured judge models failed for %s; trying plain-JSON...", ticker)
+        result = _verdict_from_plain_json(prompt)
+
+    if result is None:
+        raise RuntimeError(
+            f"Judge produced no verdict for {ticker} after structured + plain-JSON fallbacks."
+        )
 
     verdict_text = result.to_report()
-    logger.info("Judge delivered verdict for %s: %s", ticker, result.verdict)
+    logger.info("Judge delivered verdict for %s: %s (%s)", ticker, result.verdict, strategy)
 
     return {"final_verdict": verdict_text, "_structured_result": result}
 

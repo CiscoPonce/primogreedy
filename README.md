@@ -51,12 +51,12 @@ A linear 4-node pipeline for deep single-ticker analysis (used by `main.py` CLI)
 When `USE_DEBATE=true`, the analyst node runs a 3-agent LangGraph subgraph:
 
 ```
-START --> [pitcher (Nemotron 3.5)] --> [skeptic (Nemotron Super)] --> [judge (Nemotron 3.5)] --> END
+START --> [pitcher (Nemotron 3.5)] --> [skeptic (Nemotron Super)] --> [judge (Dots3 Note) --> STRICT protocol] --> END
 ```
 
 1. **The Pitcher** — Writes the strongest bullish thesis using only provided data.
 2. **The Skeptic** — Challenges the bull case, flagging any fabricated claims.
-3. **The Judge** — Synthesises the debate into a structured `InvestmentVerdict`, downgrading if fabrications were found.
+3. **The Judge** — Synthesises the debate into a structured `InvestmentVerdict`, downgrading if fabrications were found. It uses a dedicated non-reasoning JSON model, retries empty/rate-limited calls, walks a fallback model chain, and as a last resort parses a plain-LLM JSON response before raising.
 
 Models are configurable via `DEBATE_PITCHER_MODEL`, `DEBATE_SKEPTIC_MODEL`, `DEBATE_JUDGE_MODEL` env vars.
 

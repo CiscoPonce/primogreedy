@@ -192,6 +192,82 @@ check("UK price pence->pounds", abs(uk_price - 0.95) < 1e-9, f"price={uk_price}"
 check("US price unchanged", normalize_price(2.10, "AAPL", "USD") == 2.10)
 check("UK 52W low normalized", abs(normalize_price(60.0, "AFC.L", "GBP") - 0.60) < 1e-9)
 
+
+# ---------------------------------------------------------------------------
+# P0: debate judge hardening — retry on empty structured output + JSON fallback
+# ---------------------------------------------------------------------------
+print("\n== P0: debate judge hardening ==")
+
+import types
+import src.agents.debate as debate_mod
+from src.models.verdict import InvestmentVerdict
+
+V = InvestmentVerdict(
+    quantitative_base="q", lynch_pitch="l", munger_invert="m",
+    verdict="WATCH", bottom_line="b",
+)
+
+# Sanity: the three roles keep three DISTINCT default models.
+distinct = len({debate_mod.PITCHER_MODEL, debate_mod.SKEPTIC_MODEL, debate_mod.JUDGE_MODEL})
+check("3 distinct debate models by default", distinct == 3, f"distinct={distinct}")
+check("judge defaults to Dots3 Note (structured)", "dots-3-note" in debate_mod.JUDGE_MODEL)
+
+# Structured path retries empty (None) responses.
+class _FakeStructured:
+    def __init__(self):
+        self.calls = 0
+
+    def invoke(self, prompt):
+        self.calls += 1
+        return None if self.calls < 3 else V
+
+class _FakeLLM:
+    def with_structured_output(self, schema):
+        return _FakeStructured()
+
+_orig_make_llm = debate_mod._make_llm
+_orig_time = debate_mod.time
+debate_mod._make_llm = lambda model, max_tokens=2048: _FakeLLM()
+debate_mod.time = types.SimpleNamespace(sleep=lambda s: None)
+
+try:
+    res = debate_mod._structured_verdict_invoke("prompt")
+    check("judge retries empty output and recovers", isinstance(res, InvestmentVerdict) and res.verdict == "WATCH")
+
+    # Plain-JSON fallback when structured NEVER yields a verdict.
+    class _FakeStructuredNever:
+        def invoke(self, prompt):
+            return None
+
+    class _FakeLLMJson:
+        def with_structured_output(self, schema):
+            return _FakeStructuredNever()
+
+        def invoke(self, prompt):
+            return type("R", (), {"content": (
+                '{"quantitative_base":"q","lynch_pitch":"l","munger_invert":"m",'
+                '"verdict":"AVOID","bottom_line":"x"}'
+            )})()
+
+    debate_mod._make_llm = lambda model, max_tokens=2048: _FakeLLMJson()
+    state = {
+        "ticker": "TEST", "company_name": "Test Co", "strategy": "GRAHAM CLASSIC",
+        "bull_case": "b", "bear_case": "r", "price": 1.0, "eps": 0.1,
+        "book_value": 1.0, "ebitda": 5.0, "currency": "USD",
+    }
+    out = debate_mod.judge_node(state)
+    check("plain-JSON fallback yields verdict", bool(out.get("final_verdict")))
+    check("plain-JSON parses AVOID", "AVOID" in out["final_verdict"])
+finally:
+    debate_mod._make_llm = _orig_make_llm
+    debate_mod.time = _orig_time
+
+# LangGraph must NOT drop _structured_result (it must be declared in DebateState).
+check(
+    "_structured_result declared in DebateState",
+    "_structured_result" in debate_mod.DebateState.__annotations__,
+)
+
 # ---------------------------------------------------------------------------
 print("\n========================================")
 print(f"RESULT: {PASSED} passed, {FAILED} failed")
