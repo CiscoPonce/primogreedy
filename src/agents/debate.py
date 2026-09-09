@@ -44,9 +44,63 @@ class DebateState(TypedDict, total=False):
     eps: float
     book_value: float
     ebitda: float
+    currency: str
+    market_cap: float
+    revenue: float
+    revenue_growth: float
+    total_cash: float
+    total_debt: float
+    current_ratio: float
+    cash_per_share: float
+    enterprise_value: float
     bull_case: str
     bear_case: str
     final_verdict: str
+
+
+_CURRENCY_SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "CAD": "C$", "AUD": "A$"}
+
+
+def _fmt(value: float, currency: str) -> str:
+    sym = _CURRENCY_SYMBOLS.get((currency or "USD").upper(), (currency or "USD") + " ")
+    try:
+        return f"{sym}{value:,.2f}"
+    except (TypeError, ValueError):
+        return f"{sym}{value}"
+
+
+def _hard_data_line(state: DebateState) -> str:
+    """Build a single enriched HARD-DATA line shared by all debate nodes."""
+    currency = state.get("currency", "USD")
+    price = state.get("price", 0)
+    eps = state.get("eps", 0)
+    bv = state.get("book_value", 0)
+    ebitda = state.get("ebitda", 0)
+
+    parts = [
+        f"Price={_fmt(price, currency)}",
+        f"EPS={eps:.4f}",
+        f"Book/Share={bv:.4f}",
+        f"EBITDA={_fmt(ebitda, currency)}",
+    ]
+    if state.get("market_cap"):
+        parts.append(f"MCap={_fmt(state['market_cap'], currency)}")
+    if state.get("revenue"):
+        parts.append(f"Revenue={_fmt(state['revenue'], currency)}")
+    if state.get("revenue_growth") is not None:
+        parts.append(f"Rev Growth={state['revenue_growth']}")
+    if state.get("total_cash"):
+        parts.append(f"Cash={_fmt(state['total_cash'], currency)}")
+    if state.get("total_debt"):
+        parts.append(f"Debt={_fmt(state['total_debt'], currency)}")
+    if state.get("cash_per_share"):
+        parts.append(f"Cash/Share={_fmt(state['cash_per_share'], currency)}")
+    if state.get("current_ratio"):
+        parts.append(f"Current Ratio={state['current_ratio']}")
+    if state.get("enterprise_value") and state.get("revenue"):
+        evr = state["enterprise_value"] / state["revenue"]
+        parts.append(f"EV/Rev={evr:.2f}x")
+    return " | ".join(parts)
 
 
 def _make_llm(model: str, max_tokens: int = 2048):
@@ -115,7 +169,7 @@ def pitcher_node(state: DebateState) -> dict:
     prompt = (
         f"You are a bullish stock pitcher. Write the strongest possible "
         f"investment thesis for {company} ({ticker}).\n\n"
-        f"HARD DATA: Price=${price} | EPS={eps} | Book/Share={bv} | EBITDA={ebitda}\n\n"
+        f"HARD DATA: {_hard_data_line(state)}\n\n"
     )
     if fundamentals:
         prompt += f"FUNDAMENTALS:\n{fundamentals[:3000]}\n\n"
@@ -156,7 +210,7 @@ def skeptic_node(state: DebateState) -> dict:
     prompt = (
         f"You are a skeptical risk analyst. Read the BULL CASE below and "
         f"tear it apart for {company} ({ticker}).\n\n"
-        f"HARD DATA: Price=${price} | EPS={eps} | Book/Share={bv} | EBITDA={ebitda}\n\n"
+        f"HARD DATA: {_hard_data_line(state)}\n\n"
     )
     if fundamentals:
         prompt += f"FUNDAMENTALS:\n{fundamentals[:3000]}\n\n"
@@ -203,7 +257,7 @@ def judge_node(state: DebateState) -> dict:
     prompt = (
         f"You are the Chief Investment Officer making the final call on "
         f"{company} ({ticker}).\n\n"
-        f"HARD DATA: Price=${price} | EPS={eps} | Book/Share={bv} | EBITDA={ebitda}\n\n"
+        f"HARD DATA: {_hard_data_line(state)}\n\n"
         f"BULL CASE (from the Pitcher):\n{bull_case[:3000]}\n\n"
         f"BEAR CASE (from the Skeptic):\n{bear_case[:3000]}\n\n"
     )
@@ -267,6 +321,15 @@ def run_debate(
     eps: float,
     book_value: float,
     ebitda: float,
+    currency: str = "USD",
+    market_cap: float = 0.0,
+    revenue: float = 0.0,
+    revenue_growth: float = 0.0,
+    total_cash: float = 0.0,
+    total_debt: float = 0.0,
+    current_ratio: float = 0.0,
+    cash_per_share: float = 0.0,
+    enterprise_value: float = 0.0,
 ) -> dict:
     """Run the full pitcher -> skeptic -> judge debate for a ticker.
 
@@ -284,6 +347,15 @@ def run_debate(
         "eps": eps,
         "book_value": book_value,
         "ebitda": ebitda,
+        "currency": currency,
+        "market_cap": market_cap,
+        "revenue": revenue,
+        "revenue_growth": revenue_growth,
+        "total_cash": total_cash,
+        "total_debt": total_debt,
+        "current_ratio": current_ratio,
+        "cash_per_share": cash_per_share,
+        "enterprise_value": enterprise_value,
     }
 
     result = debate_app.invoke(initial_state)

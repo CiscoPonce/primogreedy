@@ -13,24 +13,25 @@ logger = get_logger(__name__)
 
 
 def get_insider_buys(ticker: str) -> dict:
-    """Fetch insider buy/sell summary from Finnhub for a US stock.
+    """Fetch insider buy/sell activity from Finnhub's insider-transactions
+    endpoint, which has global coverage (US, UK, CA, AU, India, EU).
 
     Returns:
         dict with keys: sentiment ("Bullish"/"Bearish"/"Neutral"),
-        mspr (Monthly Share Purchase Ratio), change (net shares),
-        raw_data (list of monthly records).
+        mspr (placeholder aggregated from transactions), change (net shares),
+        raw_data (list of recent transactions).
     """
     api_key = os.getenv("FINNHUB_API_KEY")
     if not api_key:
         logger.warning("FINNHUB_API_KEY not set")
         return {"sentiment": "Unknown", "mspr": 0, "change": 0, "raw_data": []}
 
-    if "." in ticker:
-        return {"sentiment": "N/A (non-US)", "mspr": 0, "change": 0, "raw_data": []}
+    # Finnhub uses bare symbols; strip Yahoo's exchange suffix.
+    symbol = ticker.split(".")[0]
 
-    url = "https://finnhub.io/api/v1/stock/insider-sentiment"
+    url = "https://finnhub.io/api/v1/stock/insider-transactions"
     params = {
-        "symbol": ticker,
+        "symbol": symbol,
         "from": (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d"),
         "to": datetime.now().strftime("%Y-%m-%d"),
         "token": api_key,
@@ -45,21 +46,25 @@ def get_insider_buys(ticker: str) -> dict:
         if not records:
             return {"sentiment": "No Data", "mspr": 0, "change": 0, "raw_data": []}
 
-        total_mspr = sum(r.get("mspr", 0) for r in records)
-        total_change = sum(r.get("change", 0) for r in records)
+        # Transactions are individual rows; aggregate net shares.
+        buy_shares = sum(r.get("share", 0) for r in records
+                         if r.get("transactionCode") in ("P", "A", "M"))
+        sell_shares = sum(abs(r.get("share", 0)) for r in records
+                          if r.get("transactionCode") in ("S", "F"))
+        change = buy_shares - sell_shares
 
-        if total_mspr > 0:
+        if change > 0:
             sentiment = "Bullish (Net Insider Buying)"
-        elif total_mspr < 0:
+        elif change < 0:
             sentiment = "Bearish (Net Insider Selling)"
         else:
             sentiment = "Neutral"
 
         return {
             "sentiment": sentiment,
-            "mspr": round(total_mspr, 4),
-            "change": total_change,
-            "raw_data": records[-3:],  # last 3 months
+            "mspr": change,
+            "change": change,
+            "raw_data": records[:3],
         }
 
     except requests.exceptions.RequestException as exc:

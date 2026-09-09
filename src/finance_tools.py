@@ -146,18 +146,24 @@ def get_finnhub_client():
     return finnhub.Client(api_key=api_key)
 
 
+def _finnhub_symbol(ticker: str) -> str:
+    """Map a Yahoo-suffixed ticker (AFC.L, NUMI.TO, VUL.AX) to the bare symbol
+    Finnhub expects.  Finnhub uses the format ``Exchange_Ticker.Exchange_Code``,
+    but for most global names passing the bare ticker (e.g. ``AFC``, ``VUL``)
+    is more reliable and works on both free and paid plans."""
+    return ticker.split(".")[0]
+
+
 @tool
 def get_insider_sentiment(ticker: str) -> str:
     """Fetch recent insider sentiment and trading behavior for a US stock."""
     try:
-        if "." in ticker:
-            return f"Insider data not supported for non-US ticker {ticker}."
-
         api_key = os.getenv("FINNHUB_API_KEY")
         if not api_key:
             return "FINNHUB_API_KEY missing."
 
-        url = f"https://finnhub.io/api/v1/stock/insider-sentiment?symbol={ticker}&from=2024-01-01&to=2026-12-31&token={api_key}"
+        symbol = _finnhub_symbol(ticker)
+        url = f"https://finnhub.io/api/v1/stock/insider-sentiment?symbol={symbol}&from=2024-01-01&to=2026-12-31&token={api_key}"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -187,16 +193,14 @@ def get_insider_sentiment(ticker: str) -> str:
 
 @tool
 def get_company_news(ticker: str) -> str:
-    """Fetch the top 3 most recent financial news headlines for a US stock."""
+    """Fetch the top 3 most recent financial news headlines for a stock."""
     try:
-        if "." in ticker:
-            return f"Finnhub news not supported for non-US ticker {ticker}."
-
         client = get_finnhub_client()
         end_date = datetime.now().strftime("%Y-%m-%d")
         start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-        news = client.company_news(ticker, _from=start_date, to=end_date)
+        symbol = _finnhub_symbol(ticker)
+        news = client.company_news(symbol, _from=start_date, to=end_date)
         if not news:
             return f"No recent news for {ticker}."
 
@@ -215,13 +219,11 @@ def get_company_news(ticker: str) -> str:
 
 @tool
 def get_basic_financials(ticker: str) -> str:
-    """Fetch deep fundamental metrics for a US stock."""
+    """Fetch deep fundamental metrics for a stock (global on paid plans)."""
     try:
-        if "." in ticker:
-            return f"Finnhub fundamentals not supported for non-US ticker {ticker}."
-
         client = get_finnhub_client()
-        data = client.company_basic_financials(ticker, "all")
+        symbol = _finnhub_symbol(ticker)
+        data = client.company_basic_financials(symbol, "all")
         if not data or "metric" not in data:
             return f"No fundamental data for {ticker}."
 

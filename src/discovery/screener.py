@@ -16,34 +16,63 @@ MAX_MARKET_CAP = 500_000_000
 MIN_MARKET_CAP = 5_000_000
 MAX_PRICE = 30.00
 
-# Pre-curated universe of US micro-cap-heavy indices / lists.
+# Pre-curated universe of micro-cap-heavy indices / lists.
 # yfinance can pull constituents for some indices; for broader coverage
 # we maintain seed lists that get refreshed via Brave trending data.
 _SEED_POOLS: dict[str, list[str]] = {
     "USA": [
-        # Russell Micro-Cap sampling — audited 2026-03-05
+        # Russell Micro-Cap sampling — audited 2026-03-05, expanded for depth
         "BSFC", "INBS", "TTOO", "ARDS", "APRE",
-        "WBUY", "SLNH", "TPST", "EDBL", "SOPA", "RCAT",
-        "BMEA", "JCSE", "ATHE", "SXTC", "REVB", "NUVB",
-        "HNVR", "COYA", "MNTS", "GWAV", "AEHL", "REBN",
+        "WBUY", "SLNH", "TPST", "EDBL", "RCAT",
+        "BMEA", "JCSE", "ATHE", "SXTC", "NUVB",
+        "HNVR", "COYA", "MNTS", "GWAV", "AEHL",
+        "BNGO", "SNDL", "CTRM", "BYND", "DM",
+        "RENT", "RIOT", "HUT", "MRIN", "SESN",
+        "SPCE", "QNRX", "CVM", "CRBP", "SENS",
+        "CRNC", "NKLA", "LAKE", "INVZ", "FDMT",
     ],
     "UK": [
-        # LSE micro-caps — audited 2026-03-05
+        # LSE micro-caps — audited 2026-03-05, expanded
         "AFC.L", "CML.L", "DUKE.L", "FLO.L", "GAW.L",
-        "JET2.L", "KIE.L", "SDI.L", "TET.L", "WINK.L",
+        "JET2.L", "KIE.L", "SDI.L", "WINK.L",
+        "ROO.L", "ATST.L", "SGRO.L", "ICG.L",
+        "MKS.L", "BAB.L", "JLP.L",
     ],
     "Canada": [
-        # TSX/TSXV micro-caps — audited 2026-03-05
-        "TVE.TO", "CJ.TO", "HWO.TO", "NPK.TO", "NUMI.TO",
+        # TSX/TSXV micro-caps — audited 2026-03-05, expanded
+        "TVE.TO", "CJ.TO", "HWO.TO", "NPK.TO",
         "BIGG.V", "FPC.V", "ZEN.V", "STUD.V", "GIGA.V",
         "LIO.V", "HPQ.V", "BSK.V",
+        "CCW.V", "MNR.V", "GLO.V", "KNT.V", "FVI.V",
+        "BTB.UN.TO", "CVE.TO", "BTE.TO", "SU.TO",
     ],
     "Australia": [
-        # ASX micro-caps — audited 2026-03-05
+        # ASX micro-caps — audited 2026-03-05, expanded
         "VUL.AX", "PEN.AX", "LKE.AX", "NVX.AX", "RNU.AX",
         "GL1.AX", "EMN.AX", "BRK.AX", "ADN.AX",
+        "CXO.AX", "SYA.AX", "LTR.AX", "SBR.AX", "BET.AX",
+        "IMU.AX", "CTM.AX", "LRS.AX", "PNN.AX",
     ],
 }
+
+
+def _pre_validate(tickers: list[str]) -> list[str]:
+    """Drop tickers that don't resolve on yfinance before adding to the pool.
+
+    Prevents dead/delisted symbols (e.g. delisted micro-caps found by Brave)
+    entering the screener pool and wasting the region's single candidate slot.
+    """
+    valid = []
+    for t in tickers:
+        try:
+            info = yf.Ticker(t).info
+            if (info.get("marketCap", 0) or 0) > 0:
+                valid.append(t)
+            else:
+                logger.info("Pre-validation dropped dead ticker: %s", t)
+        except Exception as exc:
+            logger.debug("Pre-validation skip %s: %s", t, exc)
+    return valid
 
 
 def screen_microcaps(
@@ -65,7 +94,8 @@ def screen_microcaps(
     """
     pool = list(_SEED_POOLS.get(region, []))
     if extra_tickers:
-        pool.extend(t for t in extra_tickers if t not in pool)
+        # Pre-validate web-sourced tickers so dead symbols don't enter the pool.
+        pool.extend(t for t in _pre_validate(list(extra_tickers)) if t not in pool)
 
     random.shuffle(pool)
 

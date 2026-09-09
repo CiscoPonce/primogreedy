@@ -38,7 +38,7 @@ from src.email_utils import send_email_report
 
 from src.core.logger import get_logger
 from src.core.search import brave_search
-from src.core.ticker_utils import normalize_price, REGION_SUFFIXES
+from src.core.ticker_utils import normalize_price, currency_to_usd, REGION_SUFFIXES
 from src.core.memory import load_seen_tickers, mark_ticker_seen
 from src.core.state import AgentState
 from src.core.online_eval import log_online_feedback, tag_for_review, get_current_run_id
@@ -149,14 +149,17 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout", "email"]]:
         currency = info.get("currency", "USD")
 
         price = normalize_price(price, ticker, currency)
+        # Market cap comes in the native currency (GBP/CAD/AUD); compare in USD.
+        mkt_cap_usd = currency_to_usd(mkt_cap, currency, ticker)
 
         if price > MAX_PRICE_PER_SHARE:
             logger.info("%s rejected — price $%.2f > $%.2f", ticker, price, MAX_PRICE_PER_SHARE)
             update = {"is_small_cap": False, "retry_count": retries + 1}
             return Command(update=update, goto=_fail_route(retries + 1))
 
-        if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
-            logger.info("%s rejected — cap $%s out of range", ticker, f"{mkt_cap:,.0f}")
+        if not (MIN_MARKET_CAP < mkt_cap_usd < MAX_MARKET_CAP):
+            logger.info("%s rejected — cap $%s (USD $%s) out of range",
+                        ticker, f"{mkt_cap:,.0f}", f"{mkt_cap_usd:,.0f}")
             update = {"is_small_cap": False, "retry_count": retries + 1}
             return Command(update=update, goto=_fail_route(retries + 1))
 
@@ -186,6 +189,81 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout", "email"]]:
         return Command(update=update, goto=_fail_route(retries + 1))
 
 
+_CURRENCY_SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "CAD": "C$", "AUD": "A$"}
+
+
+def _fmt_money(value: float, currency: str) -> str:
+    """Format a monetary value with the correct currency symbol."""
+    sym = _CURRENCY_SYMBOLS.get(currency, f"{currency} ")
+    try:
+        return f"{sym}{value:,.2f}"
+    except (TypeError, ValueError):
+        return f"{sym}{value}"
+
+
+def normalize_per_share_metrics(ticker: str, currency: str, eps: float, book_value: float):
+    """Convert per-share metrics to the same unit as the normalized price.
+
+    yFinance reports price in the display currency (already handled by
+    ``normalize_price``), but EPS/book-value come raw in the reporting
+    currency (pence for UK).  Mirror the fix already present in
+    ``agent.py:277-279`` so the Graham number isn't inflated ~100x for UK.
+    """
+    if ticker.endswith(".L") or currency in ("GBp", "GBX"):
+        return (eps or 0) / 100.0, (book_value or 0) / 100.0
+    return (eps or 0), (book_value or 0)
+
+
+def build_value_snapshot(info: dict, ticker: str, currency: str) -> str:
+    """Build a compact, currency-labelled snapshot of the most decision-relevant
+    value fields already present in the yfinance ``info`` dict.
+
+    Used for ALL regions so the LLM gets real fundamentals instead of a bare
+    news snippet, and (for US) augments the Finnhub deep-fundamentals.
+    """
+    eps_raw, bv_raw = normalize_per_share_metrics(
+        ticker, currency, info.get("trailingEps", 0), info.get("bookValue", 0),
+    )
+
+    def _p(price):
+        try:
+            num = float(price) if price is not None else 0.0
+        except (TypeError, ValueError):
+            num = 0.0
+        return normalize_price(num, ticker, currency)
+
+    shares = info.get("sharesOutstanding", 0) or 0
+    total_cash = info.get("totalCash", 0) or 0
+    total_debt = info.get("totalDebt", 0) or 0
+    cash_per_share = (total_cash / shares) if shares > 0 else 0
+    net_cash_per_share = ((total_cash - total_debt) / shares) if shares > 0 else 0
+    revenue = info.get("totalRevenue", 0) or 0
+    ev = info.get("enterpriseValue", 0) or 0
+    fcf = info.get("freeCashflow", 0) or 0
+
+    ev_to_rev = (ev / revenue) if revenue > 0 else 0
+
+    lines = [
+        f"FINANCIAL SNAPSHOT ({currency}):",
+        f"  Sector: {info.get('sector', 'N/A')} | Industry: {info.get('industry', 'N/A')}",
+        f"  Market Cap: {_fmt_money(info.get('marketCap', 0) or 0, currency)}",
+        f"  Price: {_fmt_money(_p(info.get('currentPrice', 0)), currency)}",
+        f"  EPS (TTM): {eps_raw:.4f} | Book/Share: {bv_raw:.4f}",
+        f"  Revenue (TTM): {_fmt_money(revenue, currency)} | EV/Revenue: {ev_to_rev:.2f}x",
+        f"  Revenue Growth: {info.get('revenueGrowth', 'N/A')}",
+        f"  Free Cash Flow: {_fmt_money(fcf, currency)}",
+        f"  Total Cash: {_fmt_money(total_cash, currency)} | Total Debt: {_fmt_money(total_debt, currency)}",
+        f"  Cash/Share: {_fmt_money(cash_per_share, currency)} | Net Cash/Share: {_fmt_money(net_cash_per_share, currency)}",
+        f"  Current Ratio: {info.get('currentRatio', 'N/A')} | P/B: {info.get('priceToBook', 'N/A')}",
+        f"  Trailing P/E: {info.get('trailingPE', 'N/A')} | P/S: {info.get('priceToSalesTrailing12Months', 'N/A')}",
+        f"  52W Range: {_fmt_money(_p(info.get('fiftyTwoWeekLow')), currency)} - "
+        f"{_fmt_money(_p(info.get('fiftyTwoWeekHigh')), currency)}",
+        f"  Insider Ownership: {info.get('heldPercentInsiders', 'N/A')} | Short % Float: {info.get('shortPercentOfFloat', 'N/A')}",
+        f"  ROE: {info.get('returnOnEquity', 'N/A')} | Gross Margin: {info.get('grossMargins', 'N/A')}",
+    ]
+    return "\n".join(lines)
+
+
 def analyst_node(state):
     """Senior Broker analysis with Graham Number, Finnhub data, and insider signals."""
     ticker = state["ticker"]
@@ -194,19 +272,28 @@ def analyst_node(state):
 
     logger.info("Analysing %s...", ticker)
 
-    price = info.get("currentPrice", 0) or info.get("regularMarketPrice", 0) or 0
-    eps = info.get("trailingEps", 0) or 0
-    book_value = info.get("bookValue", 0) or 0
+    currency = info.get("currency", "USD")
+    price_raw = info.get("currentPrice", 0) or info.get("regularMarketPrice", 0) or 0
+    price = normalize_price(price_raw, ticker, currency)
+    eps, book_value = normalize_per_share_metrics(
+        ticker, currency, info.get("trailingEps", 0), info.get("bookValue", 0),
+    )
 
     if eps > 0 and book_value > 0:
         strategy = "GRAHAM CLASSIC"
         valuation = (22.5 * eps * book_value) ** 0.5
-        thesis = f"Profitable. Graham Value ${valuation:.2f} vs Price ${price:.2f}."
+        thesis = (
+            f"Profitable. Graham Value {_fmt_money(valuation, currency)} "
+            f"vs Price {_fmt_money(price, currency)}."
+        )
     else:
         strategy = "DEEP VALUE ASSET PLAY"
         valuation = book_value
         ratio = price / book_value if book_value > 0 else 0
-        thesis = f"Unprofitable Miner/Turnaround. Trading at {ratio:.2f}x Book Value."
+        thesis = (
+            f"Unprofitable Miner/Turnaround. Trading at {ratio:.2f}x Book Value. "
+            f"Valuation: {_fmt_money(valuation if valuation > 0 else 0, currency)}."
+        )
 
     # Gather context
     news = brave_search(f"{ticker} stock analysis catalysts")
@@ -221,7 +308,7 @@ def analyst_node(state):
             logger.warning("SEC EDGAR failed for %s: %s", ticker, exc)
 
     # Build deep-fundamentals context
-    deep_fundamentals = ""
+    value_snapshot = build_value_snapshot(info, ticker, currency)
     if region == "USA" and "." not in ticker:
         logger.info("Researching Finnhub databases for %s...", ticker)
         context = ""
@@ -234,13 +321,20 @@ def analyst_node(state):
 
         insider = get_insider_buys(ticker)
         context += f"\nInsider Sentiment (6mo): {insider['sentiment']} | MSPR: {insider['mspr']} | Net Shares: {insider['change']}\n"
-        deep_fundamentals = f"DEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{context}"
+        deep_fundamentals = f"DEEP FUNDAMENTALS (FINNHUB + INSIDER FEED):\n{value_snapshot}\n{context}"
     else:
-        deep_fundamentals = f"NEWS: {str(news)[:1500]}"
+        deep_fundamentals = f"{value_snapshot}\n\nRECENT NEWS ({currency}): {str(news)[:1200]}"
 
     # --- Debate or single-LLM path ---
     from src.agents.debate import is_debate_enabled, run_debate
     from src.models.kelly import get_kelly_stats, calculate_position_size
+
+    shares = info.get("sharesOutstanding", 0) or 0
+    total_cash = info.get("totalCash", 0) or 0
+    total_debt = info.get("totalDebt", 0) or 0
+    revenue = info.get("totalRevenue", 0) or 0
+    ev = info.get("enterpriseValue", 0) or 0
+    cash_per_share = (total_cash / shares) if shares > 0 else 0
 
     if is_debate_enabled():
         logger.info("Running multi-agent debate for %s...", ticker)
@@ -248,7 +342,7 @@ def analyst_node(state):
             debate_result = run_debate(
                 ticker=ticker,
                 company_name=state.get("company_name", ticker),
-                financial_data_summary=str(info)[:2000],
+                financial_data_summary=value_snapshot,
                 deep_fundamentals=deep_fundamentals,
                 sec_context=sec_context,
                 strategy=strategy,
@@ -256,6 +350,15 @@ def analyst_node(state):
                 eps=eps,
                 book_value=book_value,
                 ebitda=info.get("ebitda", 0) or 0,
+                currency=currency,
+                market_cap=info.get("marketCap", 0) or 0,
+                revenue=revenue,
+                revenue_growth=info.get("revenueGrowth", 0) or 0,
+                total_cash=total_cash,
+                total_debt=total_debt,
+                current_ratio=info.get("currentRatio", 0) or 0,
+                cash_per_share=cash_per_share,
+                enterprise_value=ev,
             )
             result = debate_result["_structured_result"]
 
@@ -283,8 +386,8 @@ def analyst_node(state):
     # --- Single-LLM path (default or debate fallback) ---
     prompt = f"""
     Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
-    
-    HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {info.get('ebitda', 0)}
+
+    HARD DATA ({currency}): Price: {_fmt_money(price, currency)} | EPS: {eps:.4f} | Book/Share: {book_value:.4f} | EBITDA: {_fmt_money(info.get('ebitda', 0) or 0, currency)} | Market Cap: {_fmt_money(info.get('marketCap', 0) or 0, currency)} | Revenue: {_fmt_money(revenue, currency)} | Rev Growth: {info.get('revenueGrowth', 'N/A')} | Cash: {_fmt_money(total_cash, currency)} | Debt: {_fmt_money(total_debt, currency)} | Cash/Share: {_fmt_money(cash_per_share, currency)} | EV/Rev: {(ev / revenue if revenue else 0):.2f}x | Current Ratio: {info.get('currentRatio', 'N/A')} | P/B: {info.get('priceToBook', 'N/A')} | 52W High/Low: {_fmt_money(normalize_price(info.get('fiftyTwoWeekLow', 0) or 0, ticker, currency), currency)} / {_fmt_money(normalize_price(info.get('fiftyTwoWeekHigh', 0) or 0, ticker, currency), currency)}
     QUANTITATIVE THESIS: {thesis}
     """
 
@@ -386,9 +489,10 @@ def email_node(state):
     else:
         logger.info("Sending analysis for %s...", ticker)
         subject = f"Micro-Cap Found ({region}): {ticker}"
+        cap_currency = (state.get("financial_data") or {}).get("currency", "USD")
         body = (
             f"<h1>{ticker}</h1>"
-            f"<h3>Cap: ${state.get('market_cap', 0):,.0f}</h3>"
+            f"<h3>Cap: {_fmt_money(state.get('market_cap', 0) or 0, cap_currency)}</h3>"
             f"<hr>{verdict.replace(chr(10), '<br>')}"
         )
 

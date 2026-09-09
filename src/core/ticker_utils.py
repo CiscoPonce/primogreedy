@@ -49,6 +49,10 @@ NOISE_WORDS = frozenset({
     "AEDT", "AEST", "BEST", "FAST", "EVER", "FORM", "SENT",
     "GROW", "MARK", "PURE", "REAL", "SOFT", "TALK", "VOTE",
     "EU", "UK", "UN", "AI", "IT", "HR", "PR", "TV", "DC",
+    "OTCQB", "OTCQX", "OTCMKTS", "NYSEAMERICAN", "TSXV", "TSX", "ASX", "LSE",
+    "AIM", "BSE", "NSE", "SMALL", "LARGE", "TELLS", "CLEAR", "CLOSE", "OPEN",
+    "DETAILS", "ERROR", "FALSE", "TRUE", "NULL", "TOTAL", "RECENT",
+    "BULL", "BEAR", "MARGIN", "SPREAD", "TURNOVER", "LIQUIDITY", "DILUTION",
 })
 
 _MAX_TICKER_LEN = 8  # longest valid ticker with suffix: e.g. CHE.UN.TO
@@ -138,3 +142,40 @@ def normalize_price(price: float, ticker: str, currency: str = "USD") -> float:
     if ticker.endswith(".L") or currency in ("GBp", "GBX"):
         return price / 100
     return price
+
+
+def currency_to_usd(amount: float, currency: str, ticker: str = "") -> float:
+    """Convert a native-currency amount (e.g. market cap in GBP/CAD/AUD) to USD.
+
+    Fetches a live FX rate from yfinance (e.g. ``GBPUSD=X``) and caches it for
+    the process lifetime.  Falls back to returning the raw amount unchanged if
+    the currency is unknown or the rate can't be fetched.
+    """
+    if not currency or currency in ("USD", "USd"):
+        return amount or 0
+
+    import yfinance as yf
+
+    code = currency.upper()
+    if hasattr(currency_to_usd, "_cache") and code in currency_to_usd._cache:
+        return (amount or 0) * currency_to_usd._cache[code]
+
+    pair = f"{code}USD=X"
+    try:
+        ticker_yf = yf.Ticker(pair)
+        rate = (ticker_yf.info or {}).get("regularMarketPrice")
+        if not rate or rate <= 0:
+            hist = ticker_yf.history(period="1d")
+            if not hist.empty:
+                rate = float(hist["Close"].iloc[-1])
+    except Exception as exc:
+        logger.warning("FX conversion failed for %s: %s", pair, exc)
+        rate = None
+
+    if not rate or rate <= 0:
+        return amount or 0
+
+    if not hasattr(currency_to_usd, "_cache"):
+        currency_to_usd._cache = {}
+    currency_to_usd._cache[code] = rate
+    return (amount or 0) * rate
