@@ -26,17 +26,19 @@ START --> initial_routing --> [chat] --> END
                                               \--Command--> [scout]  (retry)
 ```
 
-1. **Scout Node** — Discovers candidates via yFinance screener + Brave Search trending, scores and ranks them, and pops the best unseen ticker.
+1. **Scout Node** — Discovers candidates via yFinance screener + Brave Search trending, scores and ranks them, and pops the best unseen ticker. New: tickers pulled from Brave News are pre-validated so dead/zero-cap symbols are dropped before they waste a gatekeeper retry.
 2. **Gatekeeper Node** — Strict quantitative firewall using the `Command` pattern for routing:
-   - Market Cap: $5M -- $500M
-   - Share Price: under $30.00
+   - Market Cap: **$5M -- $500M in USD** (native GBP/CAD/AUD caps are FX-converted so UK/CA/AU micro-caps gate correctly)
+   - Share Price: under $30.00 (normalized from pence for UK)
    - Zombie Filter: rejects unprofitable companies with < 6 months cash runway
    - Routes directly to `analyst` (PASS / retries exhausted) or back to `scout` (FAIL) via `Command`.
 3. **Analyst Node** — Two modes controlled by `USE_DEBATE` env var:
-   - **Single-LLM** (default): Senior Broker analysis via OpenRouter (5-model fallback chain) with structured `InvestmentVerdict` output.
+   - **Single-LLM** (default): Senior Broker analysis via OpenRouter (5-model free fallback chain) with structured `InvestmentVerdict` output.
    - **Multi-Agent Debate** (`USE_DEBATE=true`): Three-agent Investment Committee subgraph (Pitcher → Skeptic → Judge) that produces a hallucination-resistant verdict.
 
    Both modes fetch **SEC EDGAR** 10-K/10-Q filings (US equities), call Finnhub tools for deep fundamentals, and compute **Kelly Criterion position sizing**.
+
+   **Currency-safe fundamentals for ALL regions**: UK per-share metrics (EPS, book value, price, 52W range) are normalized from pence → pounds before the Graham Number math, and every analyst/debate prompt is fed a currency-labelled **value snapshot** (market cap, revenue, growth, cash, debt, cash/share, EV/Rev, current ratio, P/B, 52W range, insider ownership, margins). Non-US regions no longer get a bare news snippet — they get the same real fundamentals as US tickers, with Finnhub `.`-suffix guards removed so international symbols fetch their actual insider/news/financials data.
 
 ### Workflow Pipeline (`src/workflows/workflow.py`)
 
@@ -57,6 +59,14 @@ START --> [pitcher (Nemotron 3.5)] --> [skeptic (Nemotron Super)] --> [judge (Do
 1. **The Pitcher** — Writes the strongest bullish thesis using only provided data.
 2. **The Skeptic** — Challenges the bull case, flagging any fabricated claims.
 3. **The Judge** — Synthesises the debate into a structured `InvestmentVerdict`, downgrading if fabrications were found. It uses a dedicated non-reasoning JSON model, retries empty/rate-limited calls, walks a fallback model chain, and as a last resort parses a plain-LLM JSON response before raising.
+
+**Resilience**: the judge runs on a 8192-token cap and, on `429` rate-limit or a token-cap/empty-completion parse failure, moves to the next fallback model instead of retrying the exhausted one. The structured verdict is passed through the LangGraph `DebateState` (declared explicitly so the state reducer never drops it); if every model/path fails, the debate raises and the pipeline degrades gracefully to single-LLM analysis instead of crashing.
+
+**Free models (all OpenRouter `:free` tier)**:
+- Pitcher: `nvidia/nemotron-3.5-lightning:free`
+- Skeptic: `nvidia/nemotron-3-super-120b-a12b:free`
+- Judge: `dots-studio/dots-3-note-preview:free` (non-reasoning, emits clean JSON)
+- Fallback chain (single-LLM + judge fallbacks): `MODEL_CHAIN` in `src/llm.py` — 5 free models ending in the `openrouter/free` router catch-all.
 
 Models are configurable via `DEBATE_PITCHER_MODEL`, `DEBATE_SKEPTIC_MODEL`, `DEBATE_JUDGE_MODEL` env vars.
 
@@ -196,7 +206,7 @@ pip install -r requirements.txt
 
 ### 2. Configuration (`.env`)
 ```env
-OPENROUTER_API_KEY=your_key       # LLM Inference (5-model fallback chain)
+OPENROUTER_API_KEY=your_key       # LLM Inference (5-model free fallback chain)
 FINNHUB_API_KEY=your_key          # Deep Fundamentals & Insider Data
 BRAVE_API_KEY=your_key            # Web Search
 RESEND_API_KEY_CISCO=your_key     # Email Reporting (Cron only)
@@ -255,7 +265,7 @@ primogreedy/
 ├── src/
 │   ├── agent.py                    # Interactive Chainlit pipeline (scout/gatekeeper/analyst)
 │   ├── whale_hunter.py             # Daily cron pipeline + parallel Send orchestrator
-│   ├── llm.py                      # OpenRouter LLM with 5-model fallback + structured output
+│   ├── llm.py                      # OpenRouter LLM with 5-model free fallback + structured output
 │   ├── sec_edgar.py                # SEC EDGAR 10-K/10-Q filing fetcher + parser (@tool)
 │   ├── finance_tools.py            # Finnhub tools (@tool decorated)
 │   ├── portfolio_tracker.py        # Paper trade recording + Alpaca execution
@@ -298,7 +308,8 @@ primogreedy/
 │   ├── deploy.sh                   # VPS deployment script
 │   └── requirements.txt            # VPS-specific dependencies
 └── .github/workflows/
-    └── hunter.yml                  # Daily cron + catalyst dispatch GitHub Action
+    ├── hunter.yml                  # Daily cron + catalyst dispatch GitHub Action
+    └── reeval.yml                  # Re-evaluation cron (former gems revisit)
 ```
 
 ---
