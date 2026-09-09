@@ -279,11 +279,11 @@ def _judge_prompt(state: DebateState) -> str:
         f"You are the Chief Investment Officer making the final call on "
         f"{company} ({ticker}).\n\n"
         f"HARD DATA: {_hard_data_line(state)}\n\n"
-        f"BULL CASE (from the Pitcher):\n{bull_case[:3000]}\n\n"
-        f"BEAR CASE (from the Skeptic):\n{bear_case[:3000]}\n\n"
+        f"BULL CASE (from the Pitcher):\n{bull_case[:2500]}\n\n"
+        f"BEAR CASE (from the Skeptic):\n{bear_case[:2500]}\n\n"
     )
     if sec:
-        prompt += f"SEC FILINGS:\n{sec[:2000]}\n\n"
+        prompt += f"SEC FILINGS:\n{sec[:1500]}\n\n"
 
     prompt += (
         "RULES:\n"
@@ -311,9 +311,9 @@ def _structured_verdict_invoke(prompt: str):
     """
     from src.models.verdict import InvestmentVerdict
 
-    for idx, model in enumerate(_judge_model_chain()):
+    for model in _judge_model_chain():
         try:
-            llm = _make_llm(model, max_tokens=4096).with_structured_output(InvestmentVerdict)
+            llm = _make_llm(model, max_tokens=8192).with_structured_output(InvestmentVerdict)
         except Exception as exc:
             logger.warning("Model %s cannot emit structured output: %s", model, exc)
             continue
@@ -336,8 +336,11 @@ def _structured_verdict_invoke(prompt: str):
                     sleep_time = 20 * (attempt + 1)
                     logger.warning("Rate limit on judge model %s; sleeping %ds...", model, sleep_time)
                     time.sleep(sleep_time)
-                elif "404" in err or "too short" in err or "does not have" in err:
-                    logger.warning("Judge model %s unavailable, moving to fallback", model)
+                elif ("404" in err or "too short" in err or "does not have" in err
+                        or "length limit" in err or "parse response content" in err):
+                    # Unavailable model, or the free model hit its token cap
+                    # while emitting the JSON — no point retrying this model.
+                    logger.warning("Judge model %s unusable (%s), moving to fallback", model, err[:80])
                     break  # move to next model in chain
                 else:
                     logger.warning("Judge model %s error (attempt %d): %s", model, attempt + 1, exc)
@@ -365,7 +368,7 @@ def _verdict_from_plain_json(prompt: str):
     for model in _judge_model_chain():
         try:
             time.sleep(_DEBATE_DELAY)
-            raw = _make_llm(model, max_tokens=4096).invoke(json_prompt).content
+            raw = _make_llm(model, max_tokens=8192).invoke(json_prompt).content
         except Exception as exc:
             last_error = exc
             logger.warning("Plain-JSON judge model %s failed: %s", model, exc)
