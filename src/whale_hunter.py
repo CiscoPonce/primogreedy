@@ -33,7 +33,7 @@ from src.finance_tools import (
     get_company_news,
     get_basic_financials,
 )
-from src.portfolio_tracker import record_paper_trade
+from src.portfolio_tracker import submit_analysis
 from src.email_utils import send_email_report
 
 from src.core.logger import get_logger
@@ -264,6 +264,19 @@ def build_value_snapshot(info: dict, ticker: str, currency: str) -> str:
     return "\n".join(lines)
 
 
+def _new_position_action(verdict: str) -> str:
+    """proposal.md action for a NEW ticker staged by the automated hunter.
+
+    Discovery results never trade by themselves — they go to the review gate.
+    """
+    upper = (verdict or "").upper()
+    if "STRONG BUY" in upper or upper == "BUY":
+        return "INITIATE"
+    if upper == "WATCH":
+        return "PENDING"
+    return "DISCARD"
+
+
 def analyst_node(state):
     """Senior Broker analysis with Graham Number, Finnhub data, and insider signals."""
     ticker = state["ticker"]
@@ -370,9 +383,12 @@ def analyst_node(state):
             result.kelly_total_trades = stats.total_trades
 
             verdict = result.to_report()
-            record_paper_trade(ticker, price, verdict, source="Morning Cron",
-                               structured_verdict=result.verdict,
-                               position_size=result.position_size)
+            submit_analysis(ticker, price, source="Morning Cron",
+                            verdict=result.verdict,
+                            report_text=verdict,
+                            position_size=result.position_size,
+                            structured=result,
+                            proposed_action=_new_position_action(result.verdict))
 
             _run_id = get_current_run_id()
             log_online_feedback(verdict, ticker, run_id=_run_id)
@@ -432,9 +448,12 @@ def analyst_node(state):
         result.kelly_total_trades = stats.total_trades
 
         verdict = result.to_report()
-        record_paper_trade(ticker, price, verdict, source="Morning Cron",
-                           structured_verdict=result.verdict,
-                           position_size=result.position_size)
+        submit_analysis(ticker, price, source="Morning Cron",
+                        verdict=result.verdict,
+                        report_text=verdict,
+                        position_size=result.position_size,
+                        structured=result,
+                        proposed_action=_new_position_action(result.verdict))
         _run_id = get_current_run_id()
         log_online_feedback(verdict, ticker, run_id=_run_id)
         tag_for_review(verdict, ticker, run_id=_run_id)
@@ -457,8 +476,11 @@ def analyst_node(state):
                     f"\n\n### POSITION SIZING (Kelly Criterion)\n"
                     f"**Recommended allocation: {pos:.1f}% of portfolio**"
                 )
-            record_paper_trade(ticker, price, verdict, source="Morning Cron",
-                               position_size=pos)
+            submit_analysis(ticker, price, source="Morning Cron",
+                            verdict=verdict_type,
+                            report_text=verdict,
+                            position_size=pos,
+                            proposed_action=_new_position_action(verdict_type))
             _run_id = get_current_run_id()
             log_online_feedback(verdict, ticker, run_id=_run_id, is_fallback=True)
             tag_for_review(verdict, ticker, run_id=_run_id, is_fallback=True)

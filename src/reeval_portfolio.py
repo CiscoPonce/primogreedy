@@ -32,7 +32,7 @@ from src.finance_tools import (
     get_company_news,
     get_basic_financials,
 )
-from src.portfolio_tracker import record_paper_trade
+from src.portfolio_tracker import record_paper_trade, submit_analysis
 from src.discovery.insider_feed import get_insider_buys
 from src.email_utils import send_email_report
 
@@ -148,6 +148,7 @@ def analyse_ticker(ticker: str, company_name: str, info: dict) -> Optional[dict]
                 "report": report,
                 "position_size": result.position_size,
                 "price": price,
+                "structured": result,
             }
         except Exception as exc:
             logger.warning("Debate failed for %s, falling back: %s", ticker, exc)
@@ -261,13 +262,33 @@ def main():
         new_verdict = analysis["verdict"]
         changed = new_verdict != old_verdict
 
-        # Record the re-evaluated trade (this handles Alpaca + VPS automatically)
-        record_paper_trade(
-            ticker, analysis["price"], analysis["report"],
-            source="reeval_cron",
-            structured_verdict=new_verdict,
+        # proposal.md review gate: every re-eval becomes a structured analysis
+        # staged on the watchlist. Only "MAINTAIN" refreshes the ledger
+        # automatically (informational — WATCH, never an order). INCREASE /
+        # REDUCE / CLOSE / INITIATE wait for an explicit accept (dashboard/API).
+        proposed_action = {
+            "STRONG BUY": "INCREASE",
+            "BUY": "INCREASE",
+            "WATCH": "MAINTAIN",
+            "AVOID": "CLOSE",
+        }.get(new_verdict, "PENDING")
+
+        submit_analysis(
+            ticker, analysis["price"], source="reeval_cron",
+            verdict=new_verdict,
+            report_text=analysis["report"],
             position_size=analysis["position_size"],
+            structured=analysis.get("structured"),
+            proposed_action=proposed_action,
         )
+
+        if proposed_action == "MAINTAIN":
+            record_paper_trade(
+                ticker, analysis["price"], analysis["report"],
+                source="reeval_cron",
+                structured_verdict=new_verdict,
+                position_size=analysis["position_size"],
+            )
 
         # Online eval feedback
         _run_id = get_current_run_id()

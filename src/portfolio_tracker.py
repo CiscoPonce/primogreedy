@@ -148,6 +148,155 @@ def record_paper_trade(
         logger.error("Error recording paper trade: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# 3-layer framework: submit analyses -> stage on watchlist -> review gate
+# (proposal.md). Analyses NEVER execute orders. A trade is only recorded after
+# an explicit accept (human via dashboard/Chainlit, or API).
+# ---------------------------------------------------------------------------
+
+ANALYSIS_FILE = "analyses.json"
+
+# Fields we lift from a structured InvestmentVerdict into the analysis payload
+_FRAMEWORK_FIELDS = [
+    "business_summary", "financial_evolution", "cash_flow", "debt_liquidity",
+    "dilution", "valuation_method", "valuation_bear", "valuation_base",
+    "valuation_bull", "valuation_range_low", "valuation_range_high",
+    "margin_of_safety", "risks", "invalidation_facts", "macro_factors",
+    "portfolio_fit", "sources", "data_quality", "review_trigger", "next_review_at",
+]
+
+
+def _pick(obj, name):
+    """Read a field from a pydantic model or dict, tolerating missing attrs."""
+    if obj is None:
+        return None
+    try:
+        value = getattr(obj, name)
+    except AttributeError:
+        value = obj.get(name) if isinstance(obj, dict) else None
+    if value in (None, "", [], {}):
+        return None
+    return value
+
+
+def _framework_payload(structured=None, proposed_action=None) -> dict:
+    """Extract the 3-layer framework fields from a structured verdict."""
+    payload = {name: _pick(structured, name) for name in _FRAMEWORK_FIELDS}
+    if proposed_action:
+        payload["proposed_action"] = proposed_action
+    elif structured is not None:
+        payload["proposed_action"] = _pick(structured, "proposed_action")
+    if isinstance(payload.get("sources"), list):
+        payload["sources"] = [
+            s if isinstance(s, dict) else {"type": "self", "url": None, "value": str(s)}
+            for s in payload["sources"]
+        ]
+    return payload
+
+
+def submit_analysis(
+    ticker: str,
+    price: float,
+    source: str,
+    verdict: str | None = None,
+    report_text: str | None = None,
+    position_size: float = 0.0,
+    structured=None,
+    proposed_action: str | None = None,
+) -> dict | None:
+    """Submit a framework-compliant analysis and stage the ticker for review.
+
+    Replaces automatic paper-trading: the analysis lands on the watchlist /
+    review queue, and a paper trade is only recorded after an explicit accept.
+    Never executes a broker order by itself.
+    """
+    payload = {
+        "ticker": ticker,
+        "stage": None,                       # VPS derives stage from verdict
+        "verdict": verdict,
+        "source": source,
+        "price": float(price) if price else None,
+        "currency": "USD",
+        "report_text": report_text,
+        "position_size": float(position_size or 0),
+        **_framework_payload(structured, proposed_action=proposed_action),
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    if VPS_API_URL:
+        try:
+            resp = requests.post(
+                f"{VPS_API_URL}/analyses", headers=_vps_headers(), json=payload, timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info("Analysis submitted (VPS): %s stage=%s",
+                        ticker, data.get("stage", "?"))
+            return data
+        except Exception as exc:
+            logger.warning("submit_analysis failed (VPS), using local fallback: %s", exc)
+
+    # Local fallback (keeps behavior when VPS is unreachable)
+    try:
+        records = []
+        if os.path.exists(ANALYSIS_FILE):
+            with open(ANALYSIS_FILE, "r") as f:
+                records = json.load(f)
+        records.append({**payload, "analyzed_at": datetime.now().isoformat()})
+        with open(ANALYSIS_FILE, "w") as f:
+            json.dump(records, f, indent=2)
+        logger.info("Analysis submitted (local fallback): %s", ticker)
+        return {"status": "ok", "ticker": ticker}
+    except Exception as exc:
+        logger.error("submit_analysis local fallback failed: %s", exc)
+        return None
+
+
+def get_pending_reviews() -> list:
+    """Active watchlist items awaiting an accept/dismiss decision."""
+    if not VPS_API_URL:
+        return []
+    try:
+        resp = requests.get(
+            f"{VPS_API_URL}/portfolio/reviews", headers=_vps_headers(), timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.warning("get_pending_reviews failed: %s", exc)
+        return []
+
+
+def accept_decision(ticker: str, action: str | None = None,
+                    position_size: float | None = None,
+                    entry_price: float | None = None) -> dict | None:
+    """Accept a staged analysis — the VPS writes the paper trade (no orders)."""
+    if not VPS_API_URL:
+        logger.warning("accept_decision skipped: VPS_API_URL not set")
+        return None
+    body = {"action": action, "position_size": position_size, "entry_price": entry_price}
+    body = {k: v for k, v in body.items() if v is not None}
+    resp = requests.post(
+        f"{VPS_API_URL}/watchlist/{ticker}/accept",
+        headers=_vps_headers(), json=body, timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def dismiss_decision(ticker: str) -> dict | None:
+    """Dismiss a staged analysis without recording any trade."""
+    if not VPS_API_URL:
+        logger.warning("dismiss_decision skipped: VPS_API_URL not set")
+        return None
+    resp = requests.post(
+        f"{VPS_API_URL}/watchlist/{ticker}/dismiss",
+        headers=_vps_headers(), timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def evaluate_portfolio() -> str:
     """Read the paper portfolio and calculate live performance."""
 

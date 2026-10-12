@@ -45,6 +45,33 @@ Format your response EXACTLY like this:
 
 ### FINAL VERDICT
 STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
+
+### FRAMEWORK OUTPUT (structured fields — 3-layer method)
+Fill every structured field you emit for which the data supports an answer; otherwise leave it blank and say so under data_quality. No fluff.
+
+- business_summary: one paragraph on the business model and its sector.
+- financial_evolution: 3-4 lines of revenue / EPS / EBITDA trend over recent periods.
+- cash_flow: operating cash flow vs net income, FCF sign and trajectory.
+- debt_liquidity: total debt, debt/equity, current ratio, refinancing risk.
+- dilution: share-count trend, shelf/ATM risk, recent raises.
+- valuation_method: the method(s) used (multiples, DCF, asset-based, sum-of-parts). NEVER rely on a single formula in isolation; triangulate.
+- valuation_bear / valuation_base / valuation_bull: a number for each scenario WITH the one assumption driving it.
+- valuation_range_low / valuation_range_high: the numeric fair-value range (numbers only).
+- margin_of_safety: current price vs the base scenario as a %.
+- risks: the top 3-5 SPECIFIC risks, each with the reason it matters for this name.
+- invalidation_facts: the exact fact(s) (metric, filing, event) whose publication would break the thesis.
+- macro_factors: the rate / inflation / sector-cycle links that actually affect the outcome.
+- portfolio_fit: how this fits a diversified portfolio — position cap, sector overlap, liquidity.
+- sources: list each quantitative claim used, as [{type,url,date,period}] (filings/price/analyst/news). SEPARATE published facts from your estimates and from your inferences. Mark anything not verified as "no verificado".
+- data_quality: which inputs are published facts, which are estimates, which are your inferences, and which data is PENDING and would change the conclusion.
+- proposed_action: one of INITIATE / MAINTAIN / INCREASE / REDUCE / CLOSE / DISCARD / PENDING.
+- review_trigger: the concrete market or company event that should trigger the next review.
+- next_review_at: a concrete date (YYYY-MM-DD).
+
+Rules (never break these):
+- No universal PER / debt / valuation thresholds as the conclusion.
+- A price alert is NOT an order — it only starts a review; never propose an automatic buy/sell.
+- If valuation, risk or portfolio-fit data is missing, say so and mark the conclusion provisional.
 """
 
 

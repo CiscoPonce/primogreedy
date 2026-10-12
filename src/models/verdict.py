@@ -40,6 +40,72 @@ class InvestmentVerdict(BaseModel):
         description="Number of trades used for Kelly calc (set post-LLM)",
     )
 
+    # --- 3-layer framework fields (proposal.md) — all optional, filled by the
+    # --- Senior Broker when data supports them. No universal thresholds. -------
+    business_summary: str | None = Field(
+        default=None, description="One paragraph: business model + sector"
+    )
+    financial_evolution: str | None = Field(
+        default=None, description="Revenue / EPS / EBITDA trend over recent periods"
+    )
+    cash_flow: str | None = Field(
+        default=None, description="Operating cash flow vs net income, FCF sign & trajectory"
+    )
+    debt_liquidity: str | None = Field(
+        default=None, description="Total debt, D/E, current ratio, refinancing risk"
+    )
+    dilution: str | None = Field(
+        default=None, description="Share-count trend, shelf/ATM risk, recent raises"
+    )
+    valuation_method: str | None = Field(
+        default=None, description="Method(s) used (multiples, DCF, asset-based) — never one formula alone"
+    )
+    valuation_bear: str | None = Field(
+        default=None, description="Bear scenario value + the assumption driving it"
+    )
+    valuation_base: str | None = Field(
+        default=None, description="Base scenario value + the assumption driving it"
+    )
+    valuation_bull: str | None = Field(
+        default=None, description="Bull scenario value + the assumption driving it"
+    )
+    valuation_range_low: float | None = Field(
+        default=None, description="Low end of the fair-value range (number only)"
+    )
+    valuation_range_high: float | None = Field(
+        default=None, description="High end of the fair-value range (number only)"
+    )
+    margin_of_safety: str | None = Field(
+        default=None, description="Current price vs base-scenario value as a %"
+    )
+    risks: str | None = Field(
+        default=None, description="Top 3-5 specific risks, each with why"
+    )
+    invalidation_facts: str | None = Field(
+        default=None, description="Exact facts whose publication would break the thesis"
+    )
+    macro_factors: str | None = Field(
+        default=None, description="Rate / inflation / sector-cycle links that matter"
+    )
+    portfolio_fit: str | None = Field(
+        default=None, description="Position size vs cap, sector overlap, liquidity"
+    )
+    sources: list | None = Field(
+        default=None, description="[{type,url,date,period}] cited per quantitative claim; published vs estimates vs inferences separated"
+    )
+    data_quality: dict | None = Field(
+        default=None, description="{facts, estimates, inferences, unverified, pending}"
+    )
+    proposed_action: str | None = Field(
+        default=None, description="INITIATE|MAINTAIN|INCREASE|REDUCE|CLOSE|DISCARD|PENDING"
+    )
+    review_trigger: str | None = Field(
+        default=None, description="Market/company event that triggers the next review"
+    )
+    next_review_at: str | None = Field(
+        default=None, description="Concrete next-review date (YYYY-MM-DD)"
+    )
+
     def to_report(self) -> str:
         """Render as the markdown report format the pipeline expects."""
         qb = _strip_headers(self.quantitative_base)
