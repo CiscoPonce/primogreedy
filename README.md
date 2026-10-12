@@ -120,18 +120,30 @@ Headless agent running as a **GitHub Action** daily cron. Hunts all 4 regions in
 
 ### Alpaca Paper Trading (`src/broker/alpaca.py`)
 Optional **Alpaca Markets** integration for live paper trading of US equities:
-- Automatically submits market orders for **BUY / STRONG BUY** verdicts on US tickers
+- Submits market orders for **BUY / STRONG BUY** verdicts on US tickers — but only when a decision has been **explicitly accepted** (interactive Chainlit analysis, or an accepted watchlist item). The automated hunter/reeval never submit orders by themselves (see *Review Gate*).
 - Calculates share quantity from Kelly position sizing and account equity
 - Safety limits: minimum $1 order, maximum 25% of equity per position
 - Records `order_id`, `fill_price`, and `broker_status` to VPS
 - Dry-run mode when `ALPACA_ENABLED` is not set (logs but doesn't submit)
 
+### Review Gate — `proposal.md` 3-layer framework (`src/portfolio_tracker.py`)
+Every analysis the agent produces is stored as a structured **analysis** and staged on a **watchlist**; trades are only recorded after an explicit accept. This implements the framework's rule that *a signal starts a review — it never executes an order*.
+
+- `submit_analysis(...)` — posts the Senior Broker's structured verdict (business, cash-flow, debt/liquidity, dilution, valuation **bear/base/bull + range + margin of safety**, risks, invalidation facts, macro, portfolio fit, `sources[]`, `data_quality`, `proposed_action`, `review_trigger`, `next_review_at`) and stages the ticker.
+- Discovery (`whale_hunter`) maps verdicts to **INITIATE / PENDING / DISCARD** and records **no trade**.
+- Re-evaluation (`reeval_portfolio`) maps held positions to **INCREASE / MAINTAIN / REDUCE / CLOSE**; only **MAINTAIN** refreshes the ledger automatically (WATCH, no order) — everything else waits for acceptance.
+- `accept_decision(ticker, action=...)` / `dismiss_decision(ticker)` close the review; accepting writes the paper trade and links it (`paper_portfolio.analysis_id`).
+- Accept/dismiss from the VPS dashboard **Watchlist & Reviews** panel, the Chainlit UI, or the API.
+
 ### VPS Data Layer (`vps/`)
 Optional **FastAPI + DuckDB** backend deployed on a VPS (behind Tailscale) that replaces local JSON files for persistence:
 - `seen_tickers` — Prevents re-analysing the same ticker (30 days for BUY/STRONG BUY, 14 days for AVOID/WATCH to allow re-evaluation)
-- `paper_portfolio` — Records all paper trades with Kelly sizing, Alpaca order IDs, and fill prices
+- `paper_portfolio` — Records **accepted** paper trades with Kelly sizing, Alpaca order IDs, fill prices, and the linked `analysis_id`
+- `analyses` — Structured 3-layer analyses (stage, verdict, valuation range, risks, invalidation facts, sources, data quality, proposed action, next review)
+- `watchlist` — The review funnel: `active → accepted | dismissed`, keyed by ticker
 - `agent_runs` — Operational metrics for LangSmith correlation
-- **Live Dashboard** (`GET /dashboard`) — Chart.js-powered portfolio dashboard with summary cards, verdict distribution donut, Kelly sizing bar chart, sortable trade table, and seen-ticker feed. Auto-refreshes every 5 minutes. Dark theme.
+- **Live Dashboard** (`GET /dashboard`) — Chart.js-powered portfolio dashboard with summary cards, verdict distribution donut, Kelly sizing bar chart, sortable trade table, seen-ticker feed, and a **Watchlist & Reviews** panel with accept/dismiss controls. Auto-refreshes every 5 minutes. Dark theme.
+- **Review endpoints** — `POST/GET /analyses`, `GET /watchlist`, `GET /portfolio/reviews`, `POST /watchlist/{ticker}/accept`, `POST /watchlist/{ticker}/dismiss`
 - `GET /portfolio/summary` — Lightweight aggregated stats endpoint (no yFinance calls)
 
 The agent (`src/core/memory.py`, `src/portfolio_tracker.py`) auto-detects the VPS via `VPS_API_URL` env var and falls back to local JSON files when unavailable.
@@ -309,7 +321,8 @@ primogreedy/
 │   └── requirements.txt            # VPS-specific dependencies
 └── .github/workflows/
     ├── hunter.yml                  # Daily cron + catalyst dispatch GitHub Action
-    └── reeval.yml                  # Re-evaluation cron (former gems revisit)
+    ├── reeval.yml                  # Re-evaluation cron (former gems revisit)
+    └── push-prompt.yml             # On-demand: publish Senior Broker prompt to LangSmith Hub
 ```
 
 ---
