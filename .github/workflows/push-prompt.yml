@@ -1,0 +1,28 @@
+name: Push Senior Broker Prompt to Hub
+
+# Publishes the local Senior Broker template (src/prompts/senior_broker.py)
+# to LangSmith Hub. The daily hunter/reeval runs pull the Hub prompt at
+# runtime (PROMPT_VERSION=latest), so run this after any prompt change.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install minimal deps
+        run: pip install requests python-dotenv
+
+      - name: Push prompt to LangSmith Hub
+        env:
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGSMITH_WORKSPACE_ID: ${{ secrets.LANGSMITH_WORKSPACE_ID }}
+        run: PYTHONPATH=. python scripts/push_prompt_to_hub.py
