@@ -38,6 +38,12 @@ from src.email_utils import send_email_report
 
 logger = get_logger("reeval_portfolio")
 
+
+def _esc(value) -> str:
+    """HTML-escape a value for the report email (LLM text can contain <, >)."""
+    import html as _html
+    return _html.escape(str(value)) if value is not None else ""
+
 # --- Config ---
 VPS_API_URL = os.getenv("VPS_API_URL", "").rstrip("/")
 VPS_API_KEY = os.getenv("VPS_API_KEY", "")
@@ -200,6 +206,83 @@ def analyse_ticker(ticker: str, company_name: str, info: dict) -> Optional[dict]
         return None
 
 
+def _render_reeval_email(results: list) -> str:
+    """Render the re-evaluation email: summary + one rich card per ticker.
+
+    Uses the structured InvestmentVerdict (when available) so the email carries
+    the proposal.md framework fields — business summary, bear/base/bull
+    valuation, risks, invalidation facts, sources — instead of a bare table.
+    """
+    evaluated = [r for r in results if r.get("new") not in ("SKIP", "ERROR")]
+    skipped = [r for r in results if r.get("new") in ("SKIP", "ERROR")]
+    changed_count = sum(1 for r in evaluated if r.get("changed"))
+
+    parts = [
+        "<h1>Portfolio Re-Evaluation Results</h1>",
+        f"<p><b>{len(results)}</b> tickers reviewed &middot; "
+        f"<b>{changed_count}</b> changed &middot; "
+        f"<b>{len(evaluated) - changed_count}</b> unchanged &middot; "
+        f"<b>{len(skipped)}</b> skipped/error</p>",
+    ]
+
+    for r in evaluated:
+        sv = r.get("structured")
+        color = "#fbbf24" if r.get("changed") else "#34d399"
+        card = [
+            "<div style='border:1px solid #e5e7eb;border-radius:8px;"
+            "padding:12px;margin:12px 0'>",
+            f"<h2 style='margin:0 0 4px 0'>{_esc(r['ticker'])} "
+            f"<span style='font-weight:normal;color:#6b7280;font-size:0.8em'>"
+            f"{_esc(r.get('name', ''))}</span></h2>",
+            f"<p style='margin:4px 0'><b style='color:{color}'>"
+            f"{_esc(r.get('old', '?'))} &rarr; {_esc(r.get('new', '?'))}</b>"
+            f"{' <em>(changed)</em>' if r.get('changed') else ''}"
+            f" &nbsp;|&nbsp; action: <b>{_esc(r.get('action', '?'))}</b>"
+            f" &nbsp;|&nbsp; price: {_esc(r.get('price', '?'))}"
+            f" &nbsp;|&nbsp; pos: {float(r.get('position_size') or 0):.1f}%</p>",
+        ]
+        if sv is not None:
+            if getattr(sv, "business_summary", None):
+                card.append(f"<p style='margin:6px 0'><b>Business:</b> {_esc(sv.business_summary)}</p>")
+            lo = getattr(sv, "valuation_range_low", None)
+            hi = getattr(sv, "valuation_range_high", None)
+            if lo is not None or hi is not None:
+                line = f"<p style='margin:6px 0'><b>Fair-value range:</b> {_esc(lo)} &ndash; {_esc(hi)}"
+                if getattr(sv, "margin_of_safety", None):
+                    line += f" &nbsp;|&nbsp; <b>Margin of safety:</b> {_esc(sv.margin_of_safety)}"
+                card.append(line + "</p>")
+            scen = []
+            for label, attr in (("Bear", "valuation_bear"), ("Base", "valuation_base"), ("Bull", "valuation_bull")):
+                v = getattr(sv, attr, None)
+                if v:
+                    scen.append(f"<li><b>{label}:</b> {_esc(v)}</li>")
+            if scen:
+                card.append("<ul style='margin:6px 0 6px 18px;padding:0'>" + "".join(scen) + "</ul>")
+            if getattr(sv, "bottom_line", None):
+                card.append(f"<p style='margin:6px 0'><b>Bottom line:</b> {_esc(sv.bottom_line)}</p>")
+            if getattr(sv, "risks", None):
+                card.append(f"<p style='margin:6px 0'><b>Risks:</b> {_esc(sv.risks)}</p>")
+            if getattr(sv, "invalidation_facts", None):
+                card.append(f"<p style='margin:6px 0'><b>Invalidation facts:</b> {_esc(sv.invalidation_facts)}</p>")
+            srcs = getattr(sv, "sources", None) or []
+            if srcs:
+                card.append(f"<p style='margin:6px 0;color:#6b7280'><b>Sources:</b> {len(srcs)} cited</p>")
+        else:
+            card.append("<p><em>Structured memo unavailable for this run "
+                        "(plain-text LLM fallback) &mdash; see the report text in the "
+                        "dashboard analyses view.</em></p>")
+        card.append("</div>")
+        parts.append("".join(card))
+
+    if skipped:
+        parts.append("<h3>Skipped / errors</h3><ul>")
+        for r in skipped:
+            parts.append(f"<li>{_esc(r['ticker'])} &mdash; {_esc(r.get('new'))}: {_esc(r.get('reason', ''))}</li>")
+        parts.append("</ul>")
+
+    return "".join(parts)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Re-evaluate US tickers from VPS")
@@ -300,8 +383,10 @@ def main():
                     icon, ticker, old_verdict, new_verdict, analysis["position_size"])
 
         results.append({
-            "ticker": ticker, "old": old_verdict, "new": new_verdict,
+            "ticker": ticker, "name": name, "old": old_verdict, "new": new_verdict,
             "changed": changed, "position_size": analysis["position_size"],
+            "price": analysis.get("price"), "action": proposed_action,
+            "structured": analysis.get("structured"),
         })
 
         if i < len(trades):
@@ -320,15 +405,8 @@ def main():
     logger.info("Total: %d | Changed: %d | Same: %d",
                 len(results), changed_count, len(results) - changed_count)
 
-    # --- Email summary ---
-    email_body = "<h1>Portfolio Re-Evaluation Results</h1><table>"
-    email_body += "<tr><th>Ticker</th><th>Old</th><th>New</th><th>Status</th></tr>"
-    for r in results:
-        color = "#34d399" if not r.get("changed") else "#fbbf24"
-        email_body += f"<tr><td>{r['ticker']}</td><td>{r.get('old','?')}</td>"
-        email_body += f"<td style='color:{color}'>{r.get('new','?')}</td>"
-        email_body += f"<td>{'CHANGED' if r.get('changed') else 'SAME'}</td></tr>"
-    email_body += "</table>"
+    # --- Email summary (rich: per-ticker verdict cards + framework fields) ---
+    email_body = _render_reeval_email(results)
 
     team = [
         {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},

@@ -493,6 +493,63 @@ def analyst_node(state):
     return {"final_verdict": verdict}
 
 
+def _render_hunter_email(state, region, ticker, name, verdict, currency):
+    """Build a rich HTML report: financial snapshot + the analyst memo.
+
+    The old email was just ``<h1>ticker</h1><h3>Cap</h3><hr>verdict`` — when a
+    model returned an empty verdict there was effectively nothing to read.  The
+    snapshot guarantees useful context regardless of the memo length.
+    """
+    info = state.get("financial_data") or {}
+
+    def _row(label, value):
+        return (
+            f"<tr><td style='padding:2px 12px 2px 0;color:#6b7280;"
+            f"white-space:nowrap'>{label}</td><td style='padding:2px 0'>{value}</td></tr>"
+        )
+
+    def _pct(v):
+        try:
+            return f"{float(v) * 100:.1f}%"
+        except (TypeError, ValueError):
+            return None
+
+    rows = [
+        _row("Region", region),
+        _row("Market cap", _fmt_money(state.get("market_cap", 0) or 0, currency)),
+    ]
+    price = info.get("currentPrice") or info.get("regularMarketPrice")
+    if price:
+        rows.append(_row("Price", _fmt_money(price, currency)))
+    for label, key in (
+        ("Sector", "sector"),
+        ("Industry", "industry"),
+        ("Revenue", "totalRevenue"),
+        ("Rev growth", "revenueGrowth"),
+        ("Gross margin", "grossMargins"),
+        ("Cash", "totalCash"),
+        ("Total debt", "totalDebt"),
+        ("P/B", "priceToBook"),
+        ("Current ratio", "currentRatio"),
+        ("Short % float", "shortPercentOfFloat"),
+    ):
+        v = info.get(key)
+        if v in (None, "", "N/A"):
+            continue
+        if key in ("totalRevenue", "totalCash", "totalDebt"):
+            v = _fmt_money(v, currency)
+        elif key in ("revenueGrowth", "grossMargins", "shortPercentOfFloat"):
+            v = _pct(v) or v
+        rows.append(_row(label, v))
+
+    snapshot = "<table style='border-collapse:collapse'>" + "".join(rows) + "</table>"
+    return (
+        f"<h1>{ticker} &mdash; {name}</h1>"
+        f"{snapshot}"
+        f"<hr>{verdict.replace(chr(10), '<br>')}"
+    )
+
+
 def email_node(state):
     """Send the analysis, no-candidate, or crash report to the team."""
     region = state.get("region", "Global")
@@ -511,16 +568,19 @@ def email_node(state):
     elif not state.get("is_small_cap"):
         logger.info("Sending failure report for %s...", region)
         subject = f"Hunt Failed: {region}"
-        body = f"Found no suitable micro-caps under ${MAX_PRICE_PER_SHARE} in {region} after {MAX_RETRIES + 1} attempts."
+        body = (
+            f"<h1>Hunt Failed: {region}</h1>"
+            f"<p>Found no suitable micro-caps under "
+            f"{_fmt_money(MAX_PRICE_PER_SHARE, 'USD')} in {region} after "
+            f"{MAX_RETRIES + 1} attempts.</p>"
+        )
     else:
         logger.info("Sending analysis for %s...", ticker)
         subject = f"Micro-Cap Found ({region}): {ticker}"
-        cap_currency = (state.get("financial_data") or {}).get("currency", "USD")
-        body = (
-            f"<h1>{ticker}</h1>"
-            f"<h3>Cap: {_fmt_money(state.get('market_cap', 0) or 0, cap_currency)}</h3>"
-            f"<hr>{verdict.replace(chr(10), '<br>')}"
-        )
+        info = state.get("financial_data") or {}
+        cap_currency = info.get("currency", "USD")
+        name = state.get("company_name", ticker)
+        body = _render_hunter_email(state, region, ticker, name, verdict, cap_currency)
 
     team = [
         {"name": "Cisco", "email": os.getenv("EMAIL_CISCO"), "key": os.getenv("RESEND_API_KEY_CISCO")},
