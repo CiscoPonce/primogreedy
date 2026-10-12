@@ -17,6 +17,20 @@ def send_email_report(subject: str, html_content: str, recipient: str, api_key: 
         logger.warning("No API key for %s – email skipped", recipient)
         return None
 
+    # Never email a blank body.  This happened when a free-tier model
+    # returned an empty completion, which made the verdict string empty and
+    # reduced the report to a bare heading.  Send an explicit notice instead
+    # so the recipient knows why there is nothing to read.
+    if not (html_content or "").strip():
+        logger.warning("Empty email body for %s (subject=%r) – sending notice", recipient, subject)
+        html_content = (
+            f"<h2>{subject}</h2>"
+            "<p><b>No analysis content was produced for this run.</b></p>"
+            "<p>The analysis model returned an empty response, so there is "
+            "nothing to report. Please check the workflow logs for the model "
+            "failure and re-run.</p>"
+        )
+
     with _send_lock:
         try:
             resend.api_key = api_key
