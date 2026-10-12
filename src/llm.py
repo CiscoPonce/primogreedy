@@ -28,18 +28,22 @@ MODEL_CHAIN = [
     "openrouter/free",
 ]
 
-# Preferred model for structured (JSON) output.  Super-120B produced a valid
-# InvestmentVerdict fastest in the 2026-10-12 benchmark; Ultra-550B is the
-# strong-reasoning fallback.  See STRUCTURED_CHAIN for the ordered list.
-STRUCTURED_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+# Preferred structured-output model.  Override with the STRUCTURED_MODEL env
+# var to force the strongest free reasoner
+# ("nvidia/nemotron-3-ultra-550b-a55b:free") at the cost of latency.
+STRUCTURED_MODEL = os.getenv("STRUCTURED_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 
 # Structured-output fallbacks, tried in order by invoke_structured() so a
 # rate-limited model degrades to another structured-capable one instead of
-# dropping the proposal.md framework fields entirely.
-STRUCTURED_CHAIN = [
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/free",
+# dropping the proposal.md framework fields entirely.  The preferred model is
+# always tried first.
+STRUCTURED_CHAIN = [STRUCTURED_MODEL] + [
+    m for m in (
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/free",
+    )
+    if m != STRUCTURED_MODEL
 ]
 
 
