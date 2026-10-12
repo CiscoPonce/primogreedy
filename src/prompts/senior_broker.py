@@ -62,7 +62,7 @@ Fill every structured field you emit for which the data supports an answer; othe
 - invalidation_facts: the exact fact(s) (metric, filing, event) whose publication would break the thesis.
 - macro_factors: the rate / inflation / sector-cycle links that actually affect the outcome.
 - portfolio_fit: how this fits a diversified portfolio — position cap, sector overlap, liquidity.
-- sources: list each quantitative claim used, as [{type,url,date,period}] (filings/price/analyst/news). SEPARATE published facts from your estimates and from your inferences. Mark anything not verified as "no verificado".
+- sources: list each quantitative claim used, as [{{type,url,date,period}}] (filings/price/analyst/news). SEPARATE published facts from your estimates and from your inferences. Mark anything not verified as "no verificado".
 - data_quality: which inputs are published facts, which are estimates, which are your inferences, and which data is PENDING and would change the conclusion.
 - proposed_action: one of INITIATE / MAINTAIN / INCREASE / REDUCE / CLOSE / DISCARD / PENDING.
 - review_trigger: the concrete market or company event that should trigger the next review.
