@@ -8,6 +8,12 @@ on:
   repository_dispatch:
     types: [catalyst-alert]
 
+# Serialize with the re-evaluation pipeline (shared VPS DuckDB + free-tier
+# model limits). New runs queue instead of overlapping.
+concurrency:
+  group: primogreedy-pipeline
+  cancel-in-progress: false
+
 jobs:
   global-hunt:
     runs-on: ubuntu-latest

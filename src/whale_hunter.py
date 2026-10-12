@@ -402,38 +402,41 @@ def analyst_node(state):
             logger.warning("Debate failed for %s, falling back to single-LLM: %s", ticker, exc)
 
     # --- Single-LLM path (default or debate fallback) ---
-    prompt = f"""
-    Act as a Senior Financial Broker evaluating {state.get('company_name', ticker)} ({ticker}).
+    # Uses the shared Senior Broker template so the structured
+    # InvestmentVerdict is asked for the full proposal.md framework fields
+    # (valuation range, sources, data-quality flags, invalidation facts,
+    # ...), not just the legacy five-section memo.
+    from src.prompts.senior_broker import get_analyst_prompt
 
-    HARD DATA ({currency}): Price: {_fmt_money(price, currency)} | EPS: {eps:.4f} | Book/Share: {book_value:.4f} | EBITDA: {_fmt_money(info.get('ebitda', 0) or 0, currency)} | Market Cap: {_fmt_money(info.get('marketCap', 0) or 0, currency)} | Revenue: {_fmt_money(revenue, currency)} | Rev Growth: {info.get('revenueGrowth', 'N/A')} | Cash: {_fmt_money(total_cash, currency)} | Debt: {_fmt_money(total_debt, currency)} | Cash/Share: {_fmt_money(cash_per_share, currency)} | EV/Rev: {(ev / revenue if revenue else 0):.2f}x | Current Ratio: {info.get('currentRatio', 'N/A')} | P/B: {info.get('priceToBook', 'N/A')} | 52W High/Low: {_fmt_money(normalize_price(info.get('fiftyTwoWeekLow', 0) or 0, ticker, currency), currency)} / {_fmt_money(normalize_price(info.get('fiftyTwoWeekHigh', 0) or 0, ticker, currency), currency)}
-    QUANTITATIVE THESIS: {thesis}
-    """
+    hunter_context = (
+        f"VALUATION SNAPSHOT ({currency}): "
+        f"Market Cap {_fmt_money(info.get('marketCap', 0) or 0, currency)} | "
+        f"Revenue {_fmt_money(revenue, currency)} | "
+        f"Rev Growth {info.get('revenueGrowth', 'N/A')} | "
+        f"Cash {_fmt_money(total_cash, currency)} | "
+        f"Debt {_fmt_money(total_debt, currency)} | "
+        f"Cash/Share {_fmt_money(cash_per_share, currency)} | "
+        f"EV/Rev {(ev / revenue if revenue else 0):.2f}x | "
+        f"Current Ratio {info.get('currentRatio', 'N/A')} | "
+        f"P/B {info.get('priceToBook', 'N/A')} | "
+        f"52W High/Low "
+        f"{_fmt_money(normalize_price(info.get('fiftyTwoWeekHigh', 0) or 0, ticker, currency), currency)} / "
+        f"{_fmt_money(normalize_price(info.get('fiftyTwoWeekLow', 0) or 0, ticker, currency), currency)}. "
+        f"{deep_fundamentals}"
+    )
 
-    if sec_context:
-        prompt += f"\n{sec_context}\n"
-
-    prompt += f"\n{deep_fundamentals}\n"
-
-    prompt += f"""
-    Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis and recent insider behavior/news. Do not use fluff or buzzwords.
-    
-    Format your response EXACTLY like this:
-    
-    ### THE QUANTITATIVE BASE (Graham / Asset Play)
-    * State the current Price vs the calculated {strategy} valuation.
-    * Briefly explain if the math supports a margin of safety.
-    
-    ### THE LYNCH PITCH (Why I would own this)
-    * **The Core Action:** In one sentence, what are insiders doing (buying/selling/neutral)? 
-    * **The Catalyst:** Based on the news, what is the ONE simple reason this stock could run?
-    
-    ### THE MUNGER INVERT (How I could lose money)
-    * **Structural Weakness:** What is the most likely way an investor loses money here based on fundamentals/news?
-    * **The Bear Evidence:** What exact metric, news, or math would prove the bear case right?
-    
-    ### FINAL VERDICT
-    STRONG BUY / BUY / WATCH / AVOID (Choose one, followed by a 1-sentence bottom line).
-    """
+    prompt = get_analyst_prompt().format(
+        company_name=state.get("company_name", ticker),
+        ticker=ticker,
+        price=_fmt_money(price, currency),
+        eps=f"{eps:.4f}",
+        book_value=f"{book_value:.4f}",
+        ebitda=_fmt_money(info.get("ebitda", 0) or 0, currency),
+        thesis=thesis,
+        strategy=strategy,
+        deep_fundamentals=hunter_context,
+        sec_context=sec_context,
+    )
 
     try:
         import warnings

@@ -176,6 +176,7 @@ def analyse_ticker(ticker: str, company_name: str, info: dict) -> Optional[dict]
             "report": report,
             "position_size": result.position_size,
             "price": price,
+            "structured": result,
         }
     except Exception as exc:
         logger.warning("Structured output failed for %s, fallback to plain LLM: %s", ticker, exc)

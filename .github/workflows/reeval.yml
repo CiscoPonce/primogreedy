@@ -12,6 +12,13 @@ on:
   schedule:
     - cron: '0 14 * * 1-5'
 
+# Serialize pipeline runs: the VPS DuckDB is single-writer and the free-tier
+# model limits are shared, so two concurrent runs cause lock conflicts and
+# 429 storms (observed 2026-10-12). New runs queue instead of overlapping.
+concurrency:
+  group: primogreedy-pipeline
+  cancel-in-progress: false
+
 jobs:
   reeval:
     runs-on: ubuntu-latest

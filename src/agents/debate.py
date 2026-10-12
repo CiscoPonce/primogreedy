@@ -308,13 +308,28 @@ def _judge_prompt(state: DebateState) -> str:
         "2. Weight data-backed arguments more heavily\n"
         "3. Use strict " + strategy + " math for the quantitative base\n"
         "4. Your verdict must be one of: STRONG BUY, BUY, WATCH, AVOID\n\n"
-        "Produce a structured investment memo with EXACTLY these fields:\n"
+        "Produce a structured investment memo with these fields:\n"
         '- "quantitative_base": Price vs calculated valuation, margin of safety math\n'
         '- "lynch_pitch": The best data-backed catalyst\n'
         '- "munger_invert": The key risk from the bear case\n'
         '- "verdict": One of STRONG BUY, BUY, WATCH, AVOID\n'
-        '- "bottom_line": One sentence summary\n'
-        "Return ONLY a valid JSON object with those five keys and nothing else."
+        '- "bottom_line": One sentence summary\n\n'
+        "ALSO fill the proposal.md 3-layer framework fields (if the data does not "
+        "support a field, leave it blank and say so under data_quality):\n"
+        '- "business_summary", "financial_evolution", "cash_flow", "debt_liquidity", "dilution"\n'
+        '- "valuation_method"; "valuation_bear"/"valuation_base"/"valuation_bull" '
+        "(a number each, plus the one assumption driving it); "
+        '"valuation_range_low"/"valuation_range_high" (numbers only); '
+        '"margin_of_safety" (current price vs base, as %)\n'
+        '- "risks" (top 3-5 specific risks); "invalidation_facts" (the exact fact that breaks the thesis)\n'
+        '- "macro_factors"; "portfolio_fit"\n'
+        '- "sources": one [type,url,date,period] entry per quantitative claim; '
+        "SEPARATE published facts from your estimates and inferences; mark unverified as \"no verificado\"\n"
+        '- "data_quality": which inputs are facts / estimates / inferences, and which are PENDING\n'
+        '- "proposed_action": INITIATE / MAINTAIN / INCREASE / REDUCE / CLOSE / DISCARD / PENDING\n'
+        '- "review_trigger"; "next_review_at" (YYYY-MM-DD)\n\n'
+        "No universal PER/debt/valuation thresholds. An alert is NOT an order.\n"
+        "Return ONLY a valid JSON object with these fields and nothing else."
     )
     return prompt
 
