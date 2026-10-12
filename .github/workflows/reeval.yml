@@ -43,6 +43,14 @@ jobs:
           pip install alpaca-trade-api>=3.0 || echo "alpaca-trade-api install skipped"
           pip install "websockets>=13.0" --force-reinstall --quiet
 
+      - name: Trust VPS TLS certificate
+        run: |
+          if [ -f vps/pg.crt ]; then
+            cat /etc/ssl/certs/ca-certificates.crt vps/pg.crt > /tmp/ca-combined.pem
+            echo "REQUESTS_CA_BUNDLE=/tmp/ca-combined.pem" >> "$GITHUB_ENV"
+            echo "Trusting vps/pg.crt for outbound HTTPS"
+          fi
+
       - name: Re-Evaluate Portfolio
         env:
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
