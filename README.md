@@ -62,11 +62,12 @@ START --> [pitcher (Nemotron 3.5)] --> [skeptic (Nemotron Super)] --> [judge (Do
 
 **Resilience**: the judge runs on a 8192-token cap and, on `429` rate-limit or a token-cap/empty-completion parse failure, moves to the next fallback model instead of retrying the exhausted one. The structured verdict is passed through the LangGraph `DebateState` (declared explicitly so the state reducer never drops it); if every model/path fails, the debate raises and the pipeline degrades gracefully to single-LLM analysis instead of crashing.
 
-**Free models (all OpenRouter `:free` tier)**:
-- Pitcher: `nvidia/nemotron-3.5-lightning:free`
+**Free models (all OpenRouter `:free` tier, benchmarked 2026-10-12)**:
+- Pitcher: `nvidia/nemotron-3-ultra-550b-a55b:free` (strongest free reasoner)
 - Skeptic: `nvidia/nemotron-3-super-120b-a12b:free`
-- Judge: `dots-studio/dots-3-note-preview:free` (non-reasoning, emits clean JSON)
-- Fallback chain (single-LLM + judge fallbacks): `MODEL_CHAIN` in `src/llm.py` — 5 free models ending in the `openrouter/free` router catch-all.
+- Judge: `dots-studio/dots-3-note-preview:free` (emits clean JSON; falls back through `MODEL_CHAIN`)
+- Fallback chain (single-LLM + judge fallbacks): `MODEL_CHAIN` in `src/llm.py` — 4 free models ending in the `openrouter/free` router catch-all.
+- Structured verdicts use `STRUCTURED_CHAIN` (`invoke_structured`) so a rate-limited structured model degrades to another structured model instead of dropping the framework fields.
 
 Models are configurable via `DEBATE_PITCHER_MODEL`, `DEBATE_SKEPTIC_MODEL`, `DEBATE_JUDGE_MODEL` env vars.
 

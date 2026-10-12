@@ -26,7 +26,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, RetryPolicy, Send
 
-from src.llm import get_llm, get_structured_llm, invoke_with_fallback
+from src.llm import get_llm, get_structured_llm, invoke_with_fallback, invoke_structured
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -439,8 +439,7 @@ def analyst_node(state):
         import warnings
         from src.models.verdict import InvestmentVerdict
 
-        structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
-        result = structured_llm.invoke(prompt)
+        result = invoke_structured(prompt, InvestmentVerdict)
 
         stats = get_kelly_stats()
         result.position_size = calculate_position_size(stats, result.verdict)

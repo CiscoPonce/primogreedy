@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 from src.core.logger import get_logger
 from src.core.ticker_utils import normalize_price
 from src.core.online_eval import log_online_feedback, tag_for_review, get_current_run_id
-from src.llm import get_structured_llm, invoke_with_fallback, MODEL_CHAIN
+from src.llm import get_structured_llm, invoke_with_fallback, MODEL_CHAIN, invoke_structured
 from src.finance_tools import (
     check_financial_health,
     get_insider_sentiment,
@@ -165,8 +165,7 @@ def analyse_ticker(ticker: str, company_name: str, info: dict) -> Optional[dict]
 
     try:
         from src.models.verdict import InvestmentVerdict
-        structured_llm = get_structured_llm().with_structured_output(InvestmentVerdict)
-        result = structured_llm.invoke(prompt)
+        result = invoke_structured(prompt, InvestmentVerdict)
         stats = get_kelly_stats()
         result.position_size = calculate_position_size(stats, result.verdict)
         result.kelly_win_rate = stats.win_rate

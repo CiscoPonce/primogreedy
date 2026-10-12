@@ -152,11 +152,12 @@ All keys are stored as GitHub Secrets for the cron job and in `.env` for local d
 
 The system uses free models via OpenRouter. If one model is rate-limited (429 error), it automatically tries the next:
 
-1. `nvidia/nemotron-3.5-lightning` (primary — fast, reliable, tool-calling)
-2. `nvidia/nemotron-3-super-120b-a12b`
+1. `nvidia/nemotron-3-ultra-550b-a55b` (primary — strongest free reasoner)
+2. `nvidia/nemotron-3-super-120b-a12b` (fast, reliable structured JSON)
 3. `dots-studio/dots-3-note-preview`
-4. `inclusionai/ling-3.0-flash-sante`
-5. `openrouter/free` (router catch-all)
+4. `openrouter/free` (smart router catch-all)
+
+Structured verdicts additionally use `STRUCTURED_CHAIN` (via `invoke_structured()`), which tries structured-capable models in order so the `proposal.md` framework fields survive a rate-limited model. `nvidia/nemotron-3.5-lightning` and `inclusionai/ling-3.0-flash-sante` were removed after the 2026-10-12 benchmark (empty completions / de-listed).
 
 ---
 

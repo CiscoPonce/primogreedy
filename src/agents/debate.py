@@ -32,15 +32,32 @@ from src.models.verdict import InvestmentVerdict
 
 logger = get_logger(__name__)
 
-PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+# Pitcher default changed from nemotron-3.5-lightning:free, which the
+# 2026-10-12 benchmark showed returning empty/truncated completions and
+# rate-limiting constantly. Ultra-550B is the strongest free reasoner.
+PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-# Judge is the structured-output role; default to the dedicated non-reasoning
-# JSON model so it stays DISTINCT from pitcher and skeptic by default.
+# Judge is the structured-output role; default to the dedicated JSON model so
+# it stays DISTINCT from pitcher and skeptic.  _judge_model_chain() falls back
+# through MODEL_CHAIN if it is rate-limited.
 JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", "dots-studio/dots-3-note-preview:free")
 
 # Free-tier rate limits: 8 req/min per model.
 # Add delays between debate LLM calls to avoid 429s.
 _DEBATE_DELAY = int(os.getenv("DEBATE_DELAY_SECONDS", "10"))
+
+
+def _fallback_for(primary: str) -> str:
+    """Return the first MODEL_CHAIN entry that differs from ``primary``.
+
+    The old code passed ``MODEL_CHAIN[0]`` as the fallback, which was identical
+    to the pitcher default — so a rate-limited primary had no real backup and
+    the log read "both <model> and <model> failed".
+    """
+    for m in MODEL_CHAIN:
+        if m != primary:
+            return m
+    return MODEL_CHAIN[-1]
 
 
 class DebateState(TypedDict, total=False):
@@ -203,7 +220,7 @@ def pitcher_node(state: DebateState) -> dict:
         "Be specific and data-driven. Only cite facts present in the data above."
     )
 
-    bull_case = _resilient_llm_call(PITCHER_MODEL, prompt, MODEL_CHAIN[0])
+    bull_case = _resilient_llm_call(PITCHER_MODEL, prompt, _fallback_for(PITCHER_MODEL))
 
     logger.info("Pitcher delivered bull case for %s (%d chars)", ticker, len(bull_case))
     return {"bull_case": bull_case}
@@ -246,7 +263,7 @@ def skeptic_node(state: DebateState) -> dict:
         "Be thorough but concise."
     )
 
-    bear_case = _resilient_llm_call(SKEPTIC_MODEL, prompt, MODEL_CHAIN[0])
+    bear_case = _resilient_llm_call(SKEPTIC_MODEL, prompt, _fallback_for(SKEPTIC_MODEL))
 
     logger.info("Skeptic delivered bear case for %s (%d chars)", ticker, len(bear_case))
     return {"bear_case": bear_case}

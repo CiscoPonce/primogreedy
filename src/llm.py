@@ -8,22 +8,39 @@ load_dotenv()
 
 _llm_instance = None
 
-# Ordered by preference: quality + reliability + speed.
-# All entries verified available on the OpenRouter free tier (checked 2026-09).
-# `openrouter/free` is the router catch-all, so even if the specific free
-# models above get de-listed or rate-limited, the chain can still complete.
+# Ordered by preference: quality + reliability + speed.  Benchmarked live
+# against the OpenRouter free tier on 2026-10-12 (schema-compliance, latency,
+# token use, availability):
+#   - nemotron-3.5-lightning (3B active) returned EMPTY / truncated verdicts
+#     and rate-limited constantly -> removed from the front of the chain.
+#   - inclusionai/ling-3.0-flash-sante:free was de-listed (404) -> removed.
+#   - thinkingmachines/inkling:free (403), inclusionai/ling-3.1-flash and
+#     google/gemma-4-31b-it:free (429) were unavailable -> not used.
+#   - nemotron-3-ultra-550b (55B active) is the strongest reasoner and emits
+#     schema-valid JSON; nemotron-3-super-120b (12B active) is the fastest
+#     valid JSON and the most reliable.
+# `openrouter/free` is the smart router catch-all, so the chain can still
+# complete if the specific models above are de-listed or rate-limited.
 MODEL_CHAIN = [
-    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
     "nvidia/nemotron-3-super-120b-a12b:free",
     "dots-studio/dots-3-note-preview:free",
-    "inclusionai/ling-3.0-flash-sante:free",
     "openrouter/free",
 ]
 
-# Best model for structured (JSON) output. Dots3 Note is non-reasoning and
-# handles function/tool calls + JSON cleanly, so it does not waste completion
-# tokens on internal chain-of-thought — important for strict verdict parsing.
-STRUCTURED_MODEL = "dots-studio/dots-3-note-preview:free"
+# Preferred model for structured (JSON) output.  Super-120B produced a valid
+# InvestmentVerdict fastest in the 2026-10-12 benchmark; Ultra-550B is the
+# strong-reasoning fallback.  See STRUCTURED_CHAIN for the ordered list.
+STRUCTURED_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+
+# Structured-output fallbacks, tried in order by invoke_structured() so a
+# rate-limited model degrades to another structured-capable one instead of
+# dropping the proposal.md framework fields entirely.
+STRUCTURED_CHAIN = [
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openrouter/free",
+]
 
 
 def get_llm() -> ChatOpenAI:
@@ -55,20 +72,20 @@ def get_llm() -> ChatOpenAI:
     return _llm_instance
 
 
-def get_structured_llm(max_tokens: int = 8192) -> ChatOpenAI:
+def get_structured_llm(model: str | None = None, max_tokens: int = 8192) -> ChatOpenAI:
     """Return an LLM instance configured for structured output.
 
-    A moderate ``max_tokens`` gives enough headroom for the model to
-    produce a full InvestmentVerdict while preventing free-tier models
-    from burning all capacity on reasoning tokens and hitting the
-    ceiling before completing the JSON.
+    ``model`` defaults to :data:`STRUCTURED_MODEL`.  A moderate ``max_tokens``
+    gives enough headroom for the model to produce a full InvestmentVerdict
+    while preventing free-tier models from burning all capacity on reasoning
+    tokens and hitting the ceiling before completing the JSON.
     """
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY not found.")
 
     return ChatOpenAI(
-        model=STRUCTURED_MODEL,
+        model=model or STRUCTURED_MODEL,
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0,
@@ -137,3 +154,39 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm
                         break
 
     raise RuntimeError(f"All {len(MODEL_CHAIN)} models failed. Last tried: {MODEL_CHAIN[-1]}. Last error: {last_error}")
+
+
+def invoke_structured(prompt: str, schema, max_tokens: int = 8192):
+    """Invoke an LLM constrained to ``schema``, trying STRUCTURED_CHAIN in order.
+
+    Unlike :func:`invoke_with_fallback` (free text), this keeps the structured
+    verdict — and therefore the proposal.md framework fields (valuation range,
+    sources, data-quality flags, invalidation facts, ...) — even when the
+    preferred model is rate-limited.  Callers should only degrade to free text
+    after every structured model has failed.
+    """
+    from src.core.logger import get_logger
+    logger = get_logger(__name__)
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not found.")
+
+    last_error = None
+    for model_id in STRUCTURED_CHAIN:
+        try:
+            llm = get_structured_llm(model=model_id, max_tokens=max_tokens)
+            result = llm.with_structured_output(schema).invoke(prompt)
+            logger.info("Structured verdict via %s", model_id)
+            return result
+        except Exception as exc:
+            last_error = exc
+            err = str(exc)
+            logger.warning("Structured output via %s failed: %s", model_id, err)
+            if "429" in err:
+                time.sleep(8)  # respect free-tier 8 req/min
+
+    raise RuntimeError(
+        f"All {len(STRUCTURED_CHAIN)} structured models failed. "
+        f"Last tried: {STRUCTURED_CHAIN[-1]}. Last error: {last_error}"
+    )
