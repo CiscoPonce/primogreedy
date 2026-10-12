@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 
 import requests
@@ -179,6 +180,33 @@ def _pick(obj, name):
     return value
 
 
+def _coerce_date(val):
+    """Return YYYY-MM-DD for an LLM-supplied date, else None.
+
+    Mirrors the API guard: free-tier models often return prose for
+    ``next_review_at``, which would otherwise be rejected by the DATE column
+    (or, locally, poison analyses.json).
+    """
+    if not val:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return datetime.strptime(m.group(0), "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    for fmt in ("%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y",
+                "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
 def _framework_payload(structured=None, proposed_action=None) -> dict:
     """Extract the 3-layer framework fields from a structured verdict."""
     payload = {name: _pick(structured, name) for name in _FRAMEWORK_FIELDS}
@@ -186,6 +214,8 @@ def _framework_payload(structured=None, proposed_action=None) -> dict:
         payload["proposed_action"] = proposed_action
     elif structured is not None:
         payload["proposed_action"] = _pick(structured, "proposed_action")
+    if payload.get("next_review_at"):
+        payload["next_review_at"] = _coerce_date(payload["next_review_at"])
     if isinstance(payload.get("sources"), list):
         payload["sources"] = [
             s if isinstance(s, dict) else {"type": "self", "url": None, "value": str(s)}
