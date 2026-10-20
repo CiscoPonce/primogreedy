@@ -114,8 +114,13 @@ def scout_node(state):
     ticker = best["ticker"]
     mark_ticker_seen(ticker)
     logger.info(
-        "Target acquired: %s (score=%d) | %d backups queued",
-        ticker, best.get("score", 0), len(rest),
+        "Target acquired: %s (score=%d, source=%s, $vol/day=%.0f) | %s | %d backups queued",
+        ticker,
+        best.get("score", 0),
+        best.get("quote_source", "?"),
+        best.get("dollar_volume", 0) or 0,
+        " | ".join(best.get("score_breakdown", [])[:4]) or "no breakdown",
+        len(rest),
     )
 
     return {"ticker": ticker, "candidates": rest}

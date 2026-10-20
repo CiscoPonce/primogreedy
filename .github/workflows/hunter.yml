@@ -48,6 +48,11 @@ jobs:
             echo "Trusting vps/pg.crt for outbound HTTPS"
           fi
 
+      - name: Run logic tests
+        run: |
+          python tests/test_discovery_improvements.py
+          python tests/test_value_improvements.py
+
       - name: Run The Marathon
         env:
           RESEND_API_KEY_CISCO: ${{ secrets.RESEND_API_KEY_CISCO }}
