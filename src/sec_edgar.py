@@ -48,69 +48,90 @@ _NEXT_ITEM_PATTERN = re.compile(r"Item\s*\d+[A-Z]?[\.\s\—\-]", re.IGNORECASE)
 # EFTS search — find the most recent 10-K or 10-Q for a ticker
 # ---------------------------------------------------------------------------
 
-def _search_filings(ticker: str) -> dict | None:
-    """Query EDGAR EFTS for the most recent annual/quarterly filing.
+def _resolve_cik(ticker: str) -> str | None:
+    """Resolve a ticker to a zero-padded 10-digit CIK via EDGAR's company file.
 
-    Returns the first hit as a dict with ``file_url``, ``form_type``,
-    ``file_date``, ``company_name``, or *None* if nothing found.
+    EDGAR's full-text search does not honour a ``tickers`` filter (it silently
+    returns unrelated companies), so we must look the ticker up ourselves and
+    instead search/filter by CIK.
     """
-    two_years_ago = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    params = {
-        "q": "",
-        "forms": "10-K,10-Q",
-        "dateRange": "custom",
-        "startdt": two_years_ago,
-        "enddt": today,
-        "tickers": ticker,
-    }
-
+    url = "https://www.sec.gov/files/company_tickers.json"
     try:
-        resp = requests.get(_EFTS_URL, params=params, headers=_SEC_HEADERS, timeout=10)
+        resp = requests.get(url, headers=_SEC_HEADERS, timeout=15)
+        resp.raise_for_status()
+        for entry in resp.json().values():
+            if str(entry.get("ticker", "")).upper() == ticker.upper():
+                return str(entry.get("cik_str", "")).zfill(10)
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("EDGAR CIK lookup failed for %s: %s", ticker, exc)
+    return None
+
+
+def _search_filings(ticker: str) -> dict | None:
+    """Query EDGAR for the most recent annual/quarterly filing.
+
+    Uses the submissions API (authoritative JSON per CIK) rather than the
+    full-text search endpoint, which cannot be filtered by ticker.  Returns a
+    dict with ``form_type``, ``file_date``, ``company_name``, ``cik`` and
+    ``accession`` (no dashes), or *None* if nothing found.
+    """
+    cik = _resolve_cik(ticker)
+    if not cik:
+        logger.info("No CIK found for %s", ticker)
+        return None
+
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    try:
+        resp = requests.get(url, headers=_SEC_HEADERS, timeout=15)
         if resp.status_code != 200:
-            logger.info("EDGAR EFTS returned %d for %s", resp.status_code, ticker)
+            logger.info("EDGAR submissions returned %d for %s", resp.status_code, ticker)
             return None
+        data = resp.json()
 
-        hits = resp.json().get("hits", {}).get("hits", [])
-        if not hits:
-            return None
+        company_name = data.get("name", ticker)
+        recent = data.get("filings", {}).get("recent", {})
+        forms = recent.get("form", [])
+        dates = recent.get("filingDate", [])
+        accessions = recent.get("accessionNumber", [])
+        primary_docs = recent.get("primaryDocument", [])
 
-        src = hits[0].get("_source", {})
-        file_num = src.get("file_num", "")
-        accession = (
-            src.get("accession_no", "")
-            .replace("-", "")
-        )
+        # `recent` is ordered newest-first; pick the newest 10-K, else 10-Q.
+        for wanted in ("10-K", "10-Q"):
+            for form, date, accession, primary_doc in zip(
+                forms, dates, accessions, primary_docs
+            ):
+                if form != wanted:
+                    continue
+                return {
+                    "form_type": form,
+                    "file_date": date,
+                    "company_name": company_name,
+                    "cik": str(int(cik)),  # path form drops leading zeros
+                    "accession": accession.replace("-", ""),
+                    "primary_doc": primary_doc,
+                }
 
-        primary_doc = src.get("file_description", "")
-        if not primary_doc:
-            primary_doc = src.get("display_names", [""])[0] if src.get("display_names") else ""
+        logger.info("No 10-K/10-Q found for %s", ticker)
+        return None
 
-        entity_id = src.get("entity_id", "")
-
-        return {
-            "form_type": src.get("form_type", "10-K"),
-            "file_date": src.get("file_date", ""),
-            "company_name": src.get("display_names", [""])[0] if src.get("display_names") else ticker,
-            "entity_id": entity_id,
-            "accession": accession,
-            "file_num": file_num,
-        }
-
-    except requests.RequestException as exc:
-        logger.warning("EDGAR EFTS request failed for %s: %s", ticker, exc)
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("EDGAR submissions request failed for %s: %s", ticker, exc)
         return None
 
 
-def _fetch_filing_index(entity_id: str, accession: str) -> str | None:
-    """Fetch the filing index page and return the URL of the primary HTML document."""
-    if not entity_id or not accession:
+def _fetch_filing_index(cik: str, accession: str, primary_doc: str = "") -> str | None:
+    """Return the URL of the primary HTML document for a filing.
+
+    Prefers the known ``primary_doc`` filename from the submissions API; falls
+    back to scraping the filing index page.
+    """
+    if not cik or not accession:
         return None
 
-    index_url = (
-        f"https://www.sec.gov/Archives/edgar/data/{entity_id}/{accession}/"
-    )
+    index_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/"
+
+    if primary_doc:
+        return f"{index_url}{primary_doc}"
 
     time.sleep(0.5)
 
@@ -142,30 +163,54 @@ def _fetch_filing_index(entity_id: str, accession: str) -> str | None:
 # HTML parser — extract MD&A and Risk Factors sections
 # ---------------------------------------------------------------------------
 
+_TOC_END_PATTERN = re.compile(
+    r"Item\s*\d+[A-Z]?\s*$|Item\s*\d+[A-Z]?[\.\s]",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_prose(text: str) -> bool:
+    """Heuristic: does this text look like filing body prose (vs a TOC stub)?
+
+    Table-of-contents entries are dominated by item numbers and page numbers
+    (``Item 7A. 44``) whereas real MD&A / Risk Factors prose is sentence-heavy.
+    """
+    stripped = text.strip()
+    if len(stripped) < 200:
+        return False
+    # Count alphabetic words of length >= 4 (TOC has almost none).
+    words = re.findall(r"[A-Za-z]{4,}", stripped)
+    return len(words) >= 40
+
+
 def _extract_section(full_text: str, start_pattern: re.Pattern, label: str) -> str:
-    """Find a section by *start_pattern* and return text up to the next Item header."""
-    match = start_pattern.search(full_text)
-    if not match:
-        return ""
+    """Find a section by *start_pattern* and return its body text.
 
-    start = match.end()
-    remainder = full_text[start:]
+    Filings reference each Item at least twice: once in the table of contents
+    (followed by a page number) and once at the actual section start (followed
+    by prose).  We now iterate over every match, skip the TOC stubs, and return
+    the first occurrence that is followed by prose.
+    """
+    for match in start_pattern.finditer(full_text):
+        start = match.end()
+        remainder = full_text[start:]
 
-    end_match = _NEXT_ITEM_PATTERN.search(remainder, pos=200)
-    if end_match:
-        section_text = remainder[: end_match.start()]
-    else:
-        section_text = remainder[:_MAX_SECTION_CHARS * 2]
+        end_match = _NEXT_ITEM_PATTERN.search(remainder, pos=200)
+        if end_match:
+            section_text = remainder[: end_match.start()]
+        else:
+            section_text = remainder[:_MAX_SECTION_CHARS * 2]
 
-    section_text = section_text.strip()
-    if not section_text:
-        return ""
+        section_text = section_text.strip()
+        if not _looks_like_prose(section_text):
+            continue
 
-    if len(section_text) > _MAX_SECTION_CHARS:
-        chunks = _SPLITTER.split_text(section_text)
-        section_text = chunks[0] if chunks else section_text[:_MAX_SECTION_CHARS]
+        if len(section_text) > _MAX_SECTION_CHARS:
+            chunks = _SPLITTER.split_text(section_text)
+            section_text = chunks[0] if chunks else section_text[:_MAX_SECTION_CHARS]
+        return section_text
 
-    return section_text
+    return ""
 
 
 def parse_mda_risk_factors(html: str) -> str:
@@ -226,7 +271,9 @@ def get_sec_filings(ticker: str) -> str:
         filing["form_type"], ticker, filing["file_date"],
     )
 
-    doc_url = _fetch_filing_index(filing["entity_id"], filing["accession"])
+    doc_url = _fetch_filing_index(
+        filing["cik"], filing["accession"], filing.get("primary_doc", "")
+    )
     if not doc_url:
         return (
             f"SEC FILING GROUND TRUTH:\n"

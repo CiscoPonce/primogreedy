@@ -5,6 +5,7 @@ strongest known alpha signals in micro-cap investing.
 """
 
 import os
+import re
 from datetime import datetime, timedelta
 import requests
 from src.core.logger import get_logger
@@ -73,19 +74,21 @@ def get_insider_buys(ticker: str) -> dict:
 
 
 def get_sec_form4_feed(max_items: int = 20) -> list[dict]:
-    """Fetch recent SEC Form 4 (insider transaction) filings from EDGAR RSS.
+    """Fetch recent SEC Form 4 (insider transaction) filings from EDGAR.
 
-    This taps directly into the SEC's public EDGAR full-text search for
-    Form 4 filings, providing a near-real-time feed of insider buys.
+    Taps the SEC's public EDGAR full-text search (EFTS) for Form 4 filings,
+    providing a near-real-time feed of insider activity.
+
+    Note on the EFTS response shape: ``_source`` carries ``ciks`` (list),
+    ``display_names`` (list) and ``adsh`` (accession, dashed) — NOT the
+    ``file_num``/``entity_id`` fields an earlier version of this code assumed.
 
     Returns:
-        List of dicts with: ticker, filer, transaction_type, shares,
-        price, filing_date, url.
+        List of dicts with: ticker, filer, filing_date, url, form_type.
     """
     try:
-        url = "https://efts.sec.gov/LATEST/search-index"
         params = {
-            "q": '"acquired" AND "Form 4"',
+            "q": '"acquired"',
             "dateRange": "custom",
             "startdt": (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d"),
             "enddt": datetime.now().strftime("%Y-%m-%d"),
@@ -116,12 +119,29 @@ def get_sec_form4_feed(max_items: int = 20) -> list[dict]:
         results = []
         for hit in hits:
             src = hit.get("_source", {})
+
+            ciks = src.get("ciks") or []
+            cik = str(int(ciks[0])) if ciks else ""
+            adsh = (src.get("adsh") or "").replace("-", "")
+
+            display = src.get("display_names") or [""]
+            filer = display[0]
+
+            # display_names look like "COMPANY NAME  (TICK)  (CIK 0001234567)".
+            ticker = ""
+            match = re.search(r"\(([A-Z][A-Z0-9.\-]{0,7})\)", filer)
+            if match:
+                ticker = match.group(1)
+
             results.append({
-                "ticker": src.get("tickers", [""])[0] if src.get("tickers") else "",
-                "filer": src.get("display_names", [""])[0] if src.get("display_names") else "",
+                "ticker": ticker,
+                "filer": filer,
                 "filing_date": src.get("file_date", ""),
-                "url": f"https://www.sec.gov/Archives/edgar/data/{src.get('file_num', '')}",
-                "form_type": src.get("form_type", "4"),
+                "url": (
+                    f"https://www.sec.gov/Archives/edgar/data/{cik}/{adsh}"
+                    if cik and adsh else ""
+                ),
+                "form_type": src.get("form_type") or src.get("form") or "4",
             })
 
         logger.info("SEC Form 4 feed returned %d filings", len(results))
