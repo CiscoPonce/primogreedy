@@ -227,6 +227,7 @@
     .timeline-item .sprint-tag.s7 { background: rgba(167,139,250,0.15); color: var(--accent2); }
     .timeline-item .sprint-tag.s8 { background: rgba(34,211,238,0.15); color: var(--accent); }
     .timeline-item .sprint-tag.s9 { background: rgba(52,211,153,0.15); color: var(--green); }
+    .timeline-item .sprint-tag.s10 { background: rgba(251,191,36,0.15); color: var(--yellow); }
     .timeline-item h3 { font-size: 18px; color: var(--text-bright); margin-bottom: 6px; }
     .timeline-item p { font-size: 14px; color: var(--text-dim); }
     .timeline-item ul { margin-top: 10px; padding-left: 18px; }
@@ -324,15 +325,15 @@
 
 <!-- HERO -->
 <section class="hero">
-  <div class="hero-badge"><span class="dot"></span> Sprint 9+ — Live Dashboard &amp; Active Quality Control</div>
+  <div class="hero-badge"><span class="dot"></span> Sprint 10 — Whole-Market Discovery &amp; Insider Signals</div>
   <h1>Primo<span>Greedy</span></h1>
   <p>An autonomous AI agent that hunts, filters, debates, grades, and paper-trades micro-cap stocks across 4 global markets — every single day.</p>
   <div class="hero-stats">
     <div class="hero-stat"><div class="num">4</div><div class="label">Markets</div></div>
-    <div class="hero-stat"><div class="num">6</div><div class="label">LLM Fallback Chain</div></div>
+    <div class="hero-stat"><div class="num">Whole-Market</div><div class="label">Discovery</div></div>
     <div class="hero-stat"><div class="num">3</div><div class="label">Debate Agents</div></div>
     <div class="hero-stat"><div class="num">7</div><div class="label">Auto Evaluators</div></div>
-    <div class="hero-stat"><div class="num">24/7</div><div class="label">Catalyst Watch</div></div>
+    <div class="hero-stat"><div class="num">32</div><div class="label">Logic Tests</div></div>
     <div class="hero-stat"><div class="num">Live</div><div class="label">Dashboard</div></div>
   </div>
 </section>
@@ -364,18 +365,18 @@
       <div class="pipeline-features">
         <div class="pipeline-feature">
           <div class="icon">🔍</div>
-          <h4>Two-Pronged Discovery</h4>
-          <p>yFinance screener + Brave Search trending merged, scored, and ranked.</p>
+          <h4>Whole-Market Discovery</h4>
+          <p>Yahoo screener scans every equity in-band, merged with a curated seed pool + Brave trending so a screener outage degrades gracefully.</p>
         </div>
         <div class="pipeline-feature">
           <div class="icon">🚧</div>
-          <h4>Quantitative Firewall</h4>
-          <p>$5M–$500M cap, &lt;$30 price, zombie filter. Command routing.</p>
+          <h4>Liquidity Firewall</h4>
+          <p>$5M–$500M cap, &lt;$30 price, min volume &amp; $150k/day, exchange allow-lists, short-float cap, and a pump/blow-off guard.</p>
         </div>
         <div class="pipeline-feature">
-          <div class="icon">🧠</div>
-          <h4>Structured Verdicts</h4>
-          <p>Pydantic InvestmentVerdict model with Kelly Criterion sizing.</p>
+          <div class="icon">🕵️</div>
+          <h4>Insider Buying Signal</h4>
+          <p>SEC Form 4 net-buying feeds candidate scoring (+20 for large net buys) — the strongest known micro-cap alpha signal.</p>
         </div>
         <div class="pipeline-feature">
           <div class="icon">📧</div>
@@ -472,13 +473,23 @@
     <div class="cards">
       <div class="card">
         <div class="card-icon cyan">🎯</div>
-        <h3>Screener &amp; Scoring</h3>
-        <p>yFinance-based micro-cap screener with quantitative candidate scoring. Brave Search adds trending/momentum signals. $5M–$500M market cap range.</p>
+        <h3>Whole-Market Screener &amp; Scoring</h3>
+        <p>A dynamic Yahoo screener (<code>EquityQuery</code>) scans <em>every</em> equity in a region within the value band, sorted by volume — replacing the old ~40-ticker hardcoded pool. A curated seed pool is merged as a fallback so coverage is never lost and a screener outage degrades gracefully. Brave Search adds trending/momentum signals.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon red">🚦</div>
+        <h3>Liquidity &amp; Quality Gates</h3>
+        <p>Every candidate must clear hard filters before consuming the region's analyst slot: min avg volume (25k), min $150k/day dollar volume, $0.10 price floor, per-region exchange allow-lists (excludes OTC pink sheets), a 30% short-float cap, and a pump/blow-off guard against violent intraday spikes on abnormal volume.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon purple">🕵️</div>
+        <h3>Insider Buying Signal</h3>
+        <p>SEC Form 4 net-buying is folded directly into candidate scoring (cached per run): +20 for large net buys (≥500k shares), +12 otherwise, −5 for net selling. A tradeable-liquidity bonus further rewards genuinely liquid names.</p>
       </div>
       <div class="card">
         <div class="card-icon purple">📄</div>
         <h3>SEC EDGAR Ground Truth</h3>
-        <p>Fetches 10-K/10-Q filings for US equities. Extracts MD&A and Risk Factors via BeautifulSoup. Injected into the analyst prompt as hard evidence.</p>
+        <p>Resolves tickers to CIK via EDGAR's company file, then reads the authoritative submissions API for 10-K/10-Q filings. Extracts MD&amp;A and Risk Factors via BeautifulSoup (skipping table-of-contents stubs) and injects the real prose into the analyst prompt as hard evidence.</p>
       </div>
       <div class="card">
         <div class="card-icon green">📊</div>
@@ -524,7 +535,7 @@
   <div class="container">
     <div class="section-label">Evolution</div>
     <div class="section-title">Sprint Timeline</div>
-    <div class="section-desc">From basic screening to autonomous paper trading in 9 sprints.</div>
+    <div class="section-desc">From basic screening to whole-market discovery and insider-signal scoring in 10 sprints.</div>
     <div class="timeline">
 
       <div class="timeline-item done">
@@ -566,6 +577,18 @@
           <li><strong>Annotation Queue:</strong> WATCH/AVOID/fallback verdicts auto-tagged with <code>needs_review</code> in LangSmith for team review</li>
           <li><strong>Prompt A/B Testing:</strong> <code>PROMPT_VERSION</code> env var pins LangSmith Hub prompts to specific commits for controlled experiments</li>
           <li><strong>New endpoint:</strong> <code>GET /portfolio/summary</code> for lightweight stats without yFinance calls</li>
+        </ul>
+      </div>
+
+      <div class="timeline-item done">
+        <div class="sprint-tag s10">Sprint 10 — Whole-Market Discovery &amp; Reliable Ground Truth</div>
+        <h3>Dynamic Screener + Insider Scoring + EDGAR Fix</h3>
+        <ul>
+          <li><strong>Dynamic whole-market screener:</strong> Primary discovery via the Yahoo screener (<code>EquityQuery</code> + <code>screen()</code>) pulls every equity in-band, sorted by volume. The curated seed pool is merged as a fallback — verified live, Canada went from 0 → 20 candidates.</li>
+          <li><strong>Liquidity &amp; quality gates:</strong> Min avg volume, min dollar volume, price floor, exchange allow-lists, short-float cap, and a pump/blow-off guard run before the expensive analyst step.</li>
+          <li><strong>Insider buying in scoring:</strong> SEC Form 4 net-buying now feeds candidate ranking (+20 large net buys, +12 otherwise, −5 net selling), cached per run.</li>
+          <li><strong>SEC EDGAR fix:</strong> Ticker→CIK resolution + submissions API replaces the ignored <code>tickers=</code> EFTS filter and non-existent fields; section extraction now skips the table of contents and captures real MD&amp;A/Risk Factors prose.</li>
+          <li><strong>Reliability net:</strong> new <code>tests/test_discovery_improvements.py</code> (32 assertions) plus a CI step running both logic suites before every hunt. Requires <code>yfinance&gt;=1.6</code>, guarded so older versions fall back to the seed pool.</li>
         </ul>
       </div>
 
