@@ -50,7 +50,7 @@ langchain-openai>=0.3
 langgraph>=1.0,<2.0
 chainlit
 resend
-yfinance
+yfinance>=1.6.0
 matplotlib
 backtrader
 beautifulsoup4
