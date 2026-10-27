@@ -48,6 +48,11 @@ MAX_SHORT_PCT_FLOAT = 0.30           # >30% short -> squeeze/borrow risk
 MAX_INTRADAY_MOVE = 0.50             # >50% move -> likely pump; not a value entry
 MIN_PUMP_VOL_RATIO = 3.0             # intraday vol >3x normal is suspicious when spiking
 
+# Region-specific adjustments (UK market is thinner)
+_REGION_LIQUIDITY_ADJUSTMENTS = {
+    "UK": {"min_dollar_volume": 50_000, "min_avg_volume": 10_000},
+}
+
 # Yahoo region codes accepted by the screener's `region` field.
 _YF_REGION = {
     "USA": "us",
@@ -149,16 +154,21 @@ def _candidate_from_quote(quote: dict, region: str) -> dict | None:
     )
     dollar_vol = price * avg_vol
 
+    # Region-specific adjustments
+    adj = _REGION_LIQUIDITY_ADJUSTMENTS.get(region, {})
+    min_dollar_vol = adj.get("min_dollar_volume", MIN_AVG_DOLLAR_VOLUME)
+    min_avg_vol = adj.get("min_avg_volume", MIN_AVG_VOLUME)
+
     # --- Hard liquidity / quality gates -----------------------------------
     if not (MIN_PRICE <= price <= MAX_PRICE):
         return None
     if not (MIN_MARKET_CAP < mkt_cap_usd < MAX_MARKET_CAP):
         return None
-    if avg_vol < MIN_AVG_VOLUME:
-        logger.debug("Liquidity drop %s: avg vol %s < %s", ticker, avg_vol, MIN_AVG_VOLUME)
+    if avg_vol < min_avg_vol:
+        logger.debug("Liquidity drop %s: avg vol %s < %s", ticker, avg_vol, min_avg_vol)
         return None
-    if dollar_vol < MIN_AVG_DOLLAR_VOLUME:
-        logger.debug("Liquidity drop %s: $vol %.0f < %s", ticker, dollar_vol, MIN_AVG_DOLLAR_VOLUME)
+    if dollar_vol < min_dollar_vol:
+        logger.debug("Liquidity drop %s: $vol %.0f < %s", ticker, dollar_vol, min_dollar_vol)
         return None
 
     short_pct = quote.get("shortPercentOfFloat")

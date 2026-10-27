@@ -19,6 +19,7 @@ import os
 import signal
 import time
 import warnings
+import re
 from typing import Annotated, Literal, TypedDict
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -78,6 +79,11 @@ def scout_node(state):
             logger.info("Popping next candidate from queue: %s (%d left)", ticker, len(candidates_queue))
             mark_ticker_seen(ticker)
             return {"ticker": ticker, "candidates": candidates_queue}
+        # For UK, be more lenient
+        elif ticker and region == "UK":
+            logger.info("UK: reusing seen candidate %s from queue", ticker)
+            mark_ticker_seen(ticker)
+            return {"ticker": ticker, "candidates": candidates_queue}
         logger.info("Skipping %s (seen recently)", ticker)
 
     # Queue is empty — run full discovery
@@ -85,14 +91,22 @@ def scout_node(state):
         logger.info("Retry pause (2s)...")
         time.sleep(2)
 
-    logger.info("[Attempt %d/%d] Scouting %s micro-caps...", retries + 1, MAX_RETRIES + 1, region)
+    max_retries = 6 if region == "UK" else MAX_RETRIES
+    logger.info("[Attempt %d/%d] Scouting %s micro-caps...", retries + 1, max_retries + 1, region)
 
-    # Prong 1: Brave Search for trending tickers
+    # Prong 1: Brave Search for trending tickers (filter garbage for UK)
     trending_tickers = get_trending_tickers_from_brave(region)
+    if region == "UK":
+        # Filter out obvious garbage
+        good_trending = []
+        for t in trending_tickers:
+            if re.match(r'^[A-Z]{1,5}(\.[A-Z]{1,2})?$', t) and len(t) <= 6:
+                good_trending.append(t)
+        trending_tickers = good_trending
     logger.info("Brave trending returned %d tickers", len(trending_tickers))
 
     # Prong 2: yFinance screener (merges trending tickers into the pool)
-    screened = screen_microcaps(region=region, extra_tickers=trending_tickers, max_results=20)
+    screened = screen_microcaps(region=region, extra_tickers=trending_tickers, max_results=30 if region == "UK" else 20)
 
     if not screened:
         logger.warning("No candidates passed screener for %s", region)
@@ -102,7 +116,12 @@ def scout_node(state):
     fresh = [c for c in screened if c["ticker"] not in seen]
     if not fresh:
         logger.warning("All screened candidates already seen for %s", region)
-        return {"ticker": "NONE", "candidates": []}
+        # For thin markets like UK, be more lenient - try to reset/reuse if no other options
+        if region in ("UK",) and screened:
+            logger.info("UK market thin - reusing candidates despite seen status")
+            fresh = screened
+        else:
+            return {"ticker": "NONE", "candidates": []}
 
     # Score and rank
     ranked = rank_candidates(fresh, top_n=5)
@@ -132,16 +151,23 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout", "email"]]:
 
     ticker = state.get("ticker", "NONE")
     retries = state.get("retry_count", 0)
+    region = state.get("region", "USA")
 
     def _fail_route(new_retries: int) -> str:
-        if new_retries > MAX_RETRIES:
+        # For thin markets, be more persistent
+        max_retries = 6 if region == "UK" else MAX_RETRIES
+        if new_retries > max_retries:
             return "email"
         return "scout"
 
     if ticker == "NONE":
         logger.warning("No ticker to evaluate")
         update = {"is_small_cap": False, "retry_count": retries + 1}
-        return Command(update=update, goto=_fail_route(retries + 1))
+        # For UK, allow more retries
+        max_retries = 6 if region == "UK" else MAX_RETRIES
+        if retries + 1 > max_retries:
+            return Command(update=update, goto="email")
+        return Command(update=update, goto="scout")
 
     logger.info("Gatekeeper evaluating %s...", ticker)
     try:
