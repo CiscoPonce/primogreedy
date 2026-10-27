@@ -440,7 +440,8 @@ def analyst_node(state):
     from src.prompts.senior_broker import get_analyst_prompt
 
     hunter_context = (
-        f"VALUATION SNAPSHOT ({currency}): "
+        f"{value_snapshot}\n\n"
+        f"ADDITIONAL CONTEXT:\n"
         f"Market Cap {_fmt_money(info.get('marketCap', 0) or 0, currency)} | "
         f"Revenue {_fmt_money(revenue, currency)} | "
         f"Rev Growth {info.get('revenueGrowth', 'N/A')} | "
@@ -453,7 +454,7 @@ def analyst_node(state):
         f"52W High/Low "
         f"{_fmt_money(normalize_price(info.get('fiftyTwoWeekHigh', 0) or 0, ticker, currency), currency)} / "
         f"{_fmt_money(normalize_price(info.get('fiftyTwoWeekLow', 0) or 0, ticker, currency), currency)}. "
-        f"{deep_fundamentals}"
+        f"\n{deep_fundamentals}"
     )
 
     prompt = get_analyst_prompt().format(

@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 SENIOR_BROKER_TEMPLATE = """Act as a Senior Financial Broker evaluating {company_name} ({ticker}).
 
-HARD DATA: Price: ${price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {ebitda}
+HARD DATA: Price: {price} | EPS: {eps} | Book/Share: {book_value} | EBITDA: {ebitda}
 QUANTITATIVE THESIS: {thesis}
 
 {deep_fundamentals}
@@ -28,6 +28,15 @@ QUANTITATIVE THESIS: {thesis}
 {sec_context}
 
 Your task is to write a highly structured investment memo combining strict {strategy} math with qualitative analysis and recent insider behavior/news. Do not use fluff or buzzwords.
+
+CRITICAL INSTRUCTIONS FOR THIN COVERAGE:
+- If filings/news/deep fundamentals are sparse or missing, DO NOT hallucinate numbers.
+- Explicitly state what's KNOWN vs UNKNOWN in data_quality. Be specific.
+- Build the thesis from what IS available (balance sheet, cash position, margins, valuation ratios).
+- For the Bear Case, be concrete: cite specific missing data or structural risks.
+- For the Catalyst, only propose if there's actual evidence. Otherwise say "no clear catalyst identified".
+- Triangulate valuation using available methods even if incomplete.
+- Write a substantive memo even with thin data - think like a forensic accountant working with limited disclosures.
 
 Format your response EXACTLY like this:
 
@@ -72,6 +81,8 @@ Rules (never break these):
 - No universal PER / debt / valuation thresholds as the conclusion.
 - A price alert is NOT an order — it only starts a review; never propose an automatic buy/sell.
 - If valuation, risk or portfolio-fit data is missing, say so and mark the conclusion provisional.
+- Be brutally honest about data gaps. "Insufficient data" is better than guessing.
+- Every major claim must be traceable to the provided data or explicitly marked as inference.
 """
 
 
