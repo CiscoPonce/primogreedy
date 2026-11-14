@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PrimoGreedy — AI Micro-Cap Hunter</title>
-  <meta name="description" content="PrimoGreedy is an autonomous, LangGraph-powered AI agent that hunts, filters, debates, grades and paper-trades micro-cap stocks across 4 global markets — every day.">
+  <title>PrimoGreedy — AI Micro-Cap Research &amp; Paper-Trading Agent</title>
+  <meta name="description" content="PrimoGreedy is an open-source, LangGraph-powered AI stock research agent that screens micro-cap companies across the US, UK, Canada, and Australia, reads SEC filings and insider trades, debates each thesis, and learns from portfolio outcomes.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -117,6 +117,45 @@
     .hero .tagline { font-size: clamp(16px, 2vw, 19px); color: var(--text-dim); max-width: 680px; margin-bottom: 14px; }
     .hero .subtag { font-size: 14px; color: var(--text-dim); opacity: 0.8; max-width: 620px; margin-bottom: 42px; }
     .hero .subtag code { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
+
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 34px; }
+    .btn-primary, .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 11px 20px; border-radius: 999px; font-size: 14px; font-weight: 600; text-decoration: none;
+      transition: transform .2s, border-color .2s, box-shadow .2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(34,211,238,0.22), rgba(167,139,250,0.22));
+      border: 1px solid var(--accent); color: var(--text-bright);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 28px -12px rgba(34,211,238,0.55); }
+    .btn-secondary {
+      background: var(--surface); border: 1px solid var(--border-hi); color: var(--text);
+    }
+    .btn-secondary:hover { transform: translateY(-2px); border-color: var(--accent2); color: var(--text-bright); }
+
+    /* ---- Plain-English Overview ---- */
+    .overview-box {
+      background: linear-gradient(180deg, var(--surface), var(--bg-soft));
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 34px; margin-bottom: 26px;
+    }
+    .overview-lead { font-size: 16.5px; color: var(--text); line-height: 1.75; margin-bottom: 26px; max-width: 880px; }
+    .overview-lead strong { color: var(--text-bright); }
+    .steps-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 14px; }
+    .step-card {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 18px;
+      transition: border-color .25s, transform .25s;
+    }
+    .step-card:hover { border-color: var(--border-hi); transform: translateY(-2px); }
+    .step-num {
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent);
+      background: rgba(34,211,238,0.10); border: 1px solid rgba(34,211,238,0.28);
+      border-radius: 6px; padding: 2px 8px; margin-bottom: 10px;
+    }
+    .step-card h4 { font-size: 14.5px; color: var(--text-bright); margin-bottom: 6px; }
+    .step-card p { font-size: 13px; color: var(--text-dim); line-height: 1.58; }
 
     .hero-stats {
       display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -242,6 +281,7 @@
     .sprint-tag.s8 { background: rgba(34,211,238,0.15); color: var(--accent); }
     .sprint-tag.s9 { background: rgba(52,211,153,0.15); color: var(--green); }
     .sprint-tag.s10 { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .sprint-tag.s11 { background: rgba(34,211,238,0.16); color: var(--accent); border: 1px solid rgba(34,211,238,0.28); }
     .timeline-item h3 { font-size: 18px; color: var(--text-bright); margin-bottom: 8px; letter-spacing: -0.3px; }
     .timeline-item p { font-size: 14px; color: var(--text-dim); }
     .timeline-item ul { margin-top: 12px; padding-left: 18px; }
@@ -312,6 +352,7 @@
   <div class="nav-inner">
     <a class="brand" href="#top"><span class="mark">PG</span>PrimoGreedy</a>
     <div class="nav-links">
+      <a href="#overview">Overview</a>
       <a href="#architecture">Architecture</a>
       <a href="#models">Models</a>
       <a href="#modules">Modules</a>
@@ -324,17 +365,66 @@
 
 <!-- HERO -->
 <section class="hero" id="top">
-  <div class="hero-badge"><span class="dot"></span> Sprint 10 — Whole-Market Discovery &amp; Insider Signals</div>
+  <div class="hero-badge"><span class="dot"></span> Attribution Loop &amp; Self-Healing Free-Model Routing</div>
   <h1>Primo<span>Greedy</span></h1>
-  <p class="tagline">An autonomous AI agent that hunts, filters, debates, grades, and paper-trades micro-cap stocks across 4 global markets — every single day.</p>
-  <p class="subtag">Built on <code>LangGraph</code> with parallel region fan-out, multi-agent debate, a strict quantitative firewall, and a review-gated execution path.</p>
+  <p class="tagline">An open-source AI stock research analyst that scans small-cap markets every day, checks real SEC filings and insider buys, debates each thesis before recommending a trade, and learns from past results.</p>
+  <p class="subtag">Built with <code>LangGraph</code>, <code>DuckDB</code>, <code>yFinance</code>, and <code>SEC EDGAR</code> — running strictly inside quantitative guardrails with human review before any order.</p>
+  <div class="hero-actions">
+    <a class="btn-primary" href="https://huggingface.co/spaces/CiscsoPonce/PrimoGreedy-Agent" target="_blank" rel="noopener">Try Live Agent (HF Space) ↗</a>
+    <a class="btn-secondary" href="https://github.com/CiscoPonce/primogreedy" target="_blank" rel="noopener">View Source on GitHub ↗</a>
+  </div>
   <div class="hero-stats">
     <div class="hero-stat"><div class="num">4</div><div class="label">Global Markets</div></div>
-    <div class="hero-stat"><div class="num">4-Stage</div><div class="label">Model Chain</div></div>
-    <div class="hero-stat"><div class="num">7</div><div class="label">Evaluators</div></div>
-    <div class="hero-stat"><div class="num">32</div><div class="label">Logic Tests</div></div>
+    <div class="hero-stat"><div class="num">5-Stage</div><div class="label">Live Free Chain</div></div>
+    <div class="hero-stat"><div class="num">7</div><div class="label">LangSmith Evaluators</div></div>
+    <div class="hero-stat"><div class="num">152</div><div class="label">Automated Tests</div></div>
   </div>
   <div class="scroll-hint">Scroll to explore ↓</div>
+</section>
+
+<!-- OVERVIEW (PLAIN ENGLISH) -->
+<section id="overview">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">Start Here</div>
+      <div class="section-title">What PrimoGreedy Is — In Plain English</div>
+      <div class="section-desc">Small companies under $500M market cap are rarely covered by Wall Street, making them full of hidden bargains — and dangerous traps. PrimoGreedy automates the slow research work while enforcing strict rules against hype.</div>
+    </div>
+
+    <div class="overview-box reveal">
+      <p class="overview-lead">
+        Think of PrimoGreedy as a <strong>disciplined junior equity analyst</strong> that wakes up every market day, scans thousands of small stocks across the <strong>USA, UK, Canada, and Australia</strong>, throws out illiquid penny-stock pumps, reads real financial statements and SEC insider filings, and forces an AI debate between a Bull and a Skeptic before surfacing a short report. <strong>It never places a trade automatically</strong> — every idea goes to a watchlist for human approval, and every open or closed position teaches the next day's search what actually works.
+      </p>
+
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-num">STEP 01 · SCOUT</div>
+          <h4>Find Candidates</h4>
+          <p>Pulls live equity screeners across 4 regions, blends curated watch pools and Brave news trends, and ranks names using volume, SEC Form 4 insider buying, and historical portfolio attribution weights.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">STEP 02 · GATEKEEPER</div>
+          <h4>Block Traps Early</h4>
+          <p>Hard math runs before any LLM token is spent: requires $5M–$500M cap, $0.10–$30 price, ≥$150k/day liquidity (UK-adjusted), primary exchanges (no OTC), ≤30% short interest, and no &gt;50% blow-off spikes.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">STEP 03 · ANALYST</div>
+          <h4>Verify &amp; Debate</h4>
+          <p>Pulls real SEC EDGAR 10-K/10-Q sections and Form 4 trades, runs Graham math + Lynch catalyst + Munger bear checks (or a 3-agent Pitcher/Skeptic/Judge debate), and sizes risk via half-Kelly.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">STEP 04 · REVIEW GATE</div>
+          <h4>Stage, Never Auto-Buy</h4>
+          <p>Stages verdicts on the VPS Watchlist (<code>INITIATE</code>, <code>PENDING</code>, <code>DISCARD</code>) and emails HTML briefs via Resend. Paper orders on Alpaca only trigger after an explicit human <code>ACCEPT</code>.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">STEP 05 · FEEDBACK</div>
+          <h4>Learn From Outcomes</h4>
+          <p>Tracks open P&amp;L and archived <code>closed_positions</code> against <code>IWM</code> &amp; <code>SPY</code>, prioritizes deep drawdowns (≤−25%) during re-evaluation, and calibrates future scoring and prompts.</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <!-- ARCHITECTURE -->
@@ -478,45 +568,47 @@
     <div class="reveal">
       <div class="section-label">Intelligence</div>
       <div class="section-title">The Model Layer</div>
-      <div class="section-desc">All inference runs on OpenRouter's free tier. A 4-stage chain (models + a router catch-all) provides automatic failover on rate limits and de-listings.</div>
+      <div class="section-desc">All inference runs on OpenRouter's free tier. A 5-stage fallback chain — filtered dynamically every hour against OpenRouter's live <code>/api/v1/models</code> <code>:free</code> catalog — prevents retired-model failures and rate-limit drops.</div>
     </div>
 
     <div class="model-grid reveal">
       <div class="model-card">
-        <div class="model-role">Primary Reasoner</div>
+        <div class="model-role">Primary Reasoner &amp; Pitcher</div>
         <div class="model-name">nvidia/nemotron-3-ultra-550b-a55b:free</div>
-        <div class="model-note">Strongest free reasoner. Emits schema-valid JSON. Default <em>Pitcher</em> in the debate and the head of the fallback chain.</div>
+        <div class="model-note">Strongest free reasoner. Default <code>STRUCTURED_MODEL</code>, head of <code>MODEL_CHAIN</code> &amp; <code>STRUCTURED_CHAIN</code>, and default <em>Pitcher</em> in committee debate.</div>
       </div>
       <div class="model-card p2">
-        <div class="model-role">Fastest Valid JSON</div>
-        <div class="model-name">nvidia/nemotron-3-super-120b-a12b:free</div>
-        <div class="model-note">The most reliable structured-output model. Default single-LLM analyst model and the default <em>Skeptic</em>.</div>
+        <div class="model-role">Adversarial Skeptic &amp; Stage 2</div>
+        <div class="model-name">google/gemma-4-31b-it:free</div>
+        <div class="model-note">Replaced the retired Nemotron Super slug. Serves as the default <em>Skeptic</em> challenging bull assumptions and Stage-2 fallback in both chains.</div>
       </div>
       <div class="model-card p3">
         <div class="model-role">Dedicated JSON Judge</div>
         <div class="model-name">dots-studio/dots-3-note-preview:free</div>
-        <div class="model-note">Emits clean JSON for the <em>Judge</em> role, keeping it distinct from the pitcher and skeptic. Falls back through the chain when rate-limited.</div>
+        <div class="model-note">Emits clean schema-valid JSON for the <em>Judge</em> role, keeping verdict synthesis independent from the Pitcher and Skeptic.</div>
       </div>
       <div class="model-card p4">
-        <div class="model-role">Router Catch-All</div>
+        <div class="model-role">Fast Fallback &amp; Router Catch-All</div>
         <div class="model-name">openrouter/free</div>
-        <div class="model-note">Smart router that keeps the chain completable even if the specific models above are de-listed or throttled.</div>
+        <div class="model-note">Paired with <code>nvidia/nemotron-3.5-lightning:free</code> (Stage 4 plain-LLM fallback) and guarded against empty completions so chains always complete.</div>
       </div>
     </div>
 
     <div class="reveal" style="margin-top: 40px;">
-      <div class="model-role" style="margin-bottom: 12px;">Fallback order (<code>MODEL_CHAIN</code>)</div>
+      <div class="model-role" style="margin-bottom: 12px;">Live-filtered fallback order (<code>MODEL_CHAIN</code>)</div>
       <div class="model-flow">
         <span class="model-chip"><span class="rank-badge">1</span>nemotron-3-ultra-550b</span>
         <span class="arrow">→</span>
-        <span class="model-chip"><span class="rank-badge">2</span>nemotron-3-super-120b</span>
+        <span class="model-chip"><span class="rank-badge">2</span>gemma-4-31b-it</span>
         <span class="arrow">→</span>
         <span class="model-chip"><span class="rank-badge">3</span>dots-3-note-preview</span>
         <span class="arrow">→</span>
-        <span class="model-chip router"><span class="rank-badge">4</span>openrouter/free</span>
+        <span class="model-chip"><span class="rank-badge">4</span>nemotron-3.5-lightning</span>
+        <span class="arrow">→</span>
+        <span class="model-chip router"><span class="rank-badge">5</span>openrouter/free</span>
       </div>
-      <p style="font-size: 13px; color: var(--text-dim); max-width: 720px;">
-        Structured verdicts walk a parallel <code>STRUCTURED_CHAIN</code> so a rate-limited model degrades to another structured-capable one instead of dropping the framework fields. Chain benchmarked live on the OpenRouter free tier; models rotate as free availability changes. Override any role with <code>DEBATE_PITCHER_MODEL</code>, <code>DEBATE_SKEPTIC_MODEL</code>, <code>DEBATE_JUDGE_MODEL</code> or <code>STRUCTURED_MODEL</code>.
+      <p style="font-size: 13px; color: var(--text-dim); max-width: 760px;">
+        <code>_live_free_models()</code> caches OpenRouter's live <code>:free</code> model IDs for 1 hour so de-listed models are skipped automatically, while <code>invoke_with_fallback()</code> rejects empty responses before continuing down the chain. Structured verdicts walk <code>STRUCTURED_CHAIN</code>; override any role via <code>DEBATE_PITCHER_MODEL</code>, <code>DEBATE_SKEPTIC_MODEL</code>, <code>DEBATE_JUDGE_MODEL</code>, or <code>STRUCTURED_MODEL</code>.
       </p>
     </div>
   </div>
@@ -602,12 +694,17 @@
       <div class="card reveal">
         <div class="card-icon purple">💾</div>
         <h3>VPS Data Layer + Live Dashboard</h3>
-        <p>FastAPI + DuckDB behind Tailscale. Seen-tickers with dynamic amnesia (14d AVOID, 30d BUY). Paper portfolio with P&amp;L tracking. Chart.js dashboard with summary cards, verdict donut, Kelly bar chart, sortable trades, and a Watchlist &amp; Reviews panel.</p>
+        <p>FastAPI + DuckDB behind Tailscale. Tracks <code>seen_tickers</code> (14d AVOID, 30d BUY), active vs. <code>delisted</code> positions, archived <code>closed_positions</code> with realized exit returns, <code>/portfolio/attribution</code> breakdowns, and <code>IWM</code> &amp; <code>SPY</code> benchmarks on a Chart.js dashboard.</p>
+      </div>
+      <div class="card reveal">
+        <div class="card-icon green">🔁</div>
+        <h3>Closed-Loop Attribution &amp; Re-Eval</h3>
+        <p>Once <code>≥ 5</code> priced trades exist, attribution stats apply a bounded <code>−6</code> to <code>+6</code> score bias in <code>score_candidate()</code> and calibrate the analyst prompt via <code>get_attribution_lessons()</code>. Weekday re-eval inspects steep drawdowns (<code>≤ −25%</code>) first.</p>
       </div>
       <div class="card reveal">
         <div class="card-icon green">🔗</div>
-        <h3>Model Fallback Chain</h3>
-        <p>4-stage cascade via OpenRouter (3 models + router catch-all). Auto-retry on 429s with exponential backoff, and a separate structured-output chain so framework fields survive a rate-limited model.</p>
+        <h3>Self-Healing Model Chain</h3>
+        <p>5-stage OpenRouter free cascade filtered hourly via <code>/api/v1/models</code>. Retries 429s with backoff, rejects empty completions, and keeps structured verdicts aligned on <code>STRUCTURED_CHAIN</code>.</p>
       </div>
       <div class="card reveal">
         <div class="card-icon yellow">🔬</div>
@@ -624,7 +721,7 @@
     <div class="reveal">
       <div class="section-label">Evolution</div>
       <div class="section-title">Sprint Timeline</div>
-      <div class="section-desc">From basic screening to whole-market discovery, insider-signal scoring, and a review-gated execution path — in 10 sprints.</div>
+      <div class="section-desc">From basic screening to whole-market discovery, insider-signal scoring, review-gated execution, and a closed-loop attribution system — across 11 sprints.</div>
     </div>
     <div class="timeline">
 
@@ -678,7 +775,18 @@
           <li><strong>Liquidity &amp; quality gates:</strong> min avg volume, min dollar volume, price floor, exchange allow-lists, short-float cap, and a pump/blow-off guard run before the expensive analyst step</li>
           <li><strong>Insider buying in scoring:</strong> SEC Form 4 net-buying now feeds candidate ranking (+20 large net buys, +12 otherwise, −5 net selling), cached per run</li>
           <li><strong>SEC EDGAR fix:</strong> ticker→CIK resolution + submissions API replaces the ignored <code>tickers=</code> EFTS filter; section extraction now skips the table of contents and captures real MD&amp;A/Risk Factors prose</li>
-          <li><strong>Reliability net:</strong> new <code>tests/test_discovery_improvements.py</code> (32 assertions) plus a CI step running both logic suites before every hunt. Requires <code>yfinance&gt;=1.6</code>, guarded so older versions fall back to the seed pool</li>
+          <li><strong>Reliability net:</strong> <code>tests/test_discovery_improvements.py</code> (35 assertions) and <code>tests/test_value_improvements.py</code> (46 assertions) run in CI before every hunt. Requires <code>yfinance&gt;=1.6</code>, guarded so older versions fall back to the seed pool</li>
+        </ul>
+      </div>
+
+      <div class="timeline-item done reveal">
+        <div class="sprint-tag s11">Sprint 11 — Attribution Loop &amp; Resilient Routing</div>
+        <h3>Closed-Loop Scoring + Archive + Self-Healing Free Models</h3>
+        <ul>
+          <li><strong>Attribution-weighted discovery &amp; prompts:</strong> <code>/portfolio/attribution</code> tracks performance by verdict, sector, and region; once <code>≥ 5</code> priced positions exist, <code>score_candidate()</code> applies a bounded <code>−6..+6</code> bias and <code>get_attribution_lessons()</code> calibrates the analyst prompt</li>
+          <li><strong>Closed-position archive &amp; benchmarks:</strong> <code>CLOSE</code> accepts archive paper trades into <code>closed_positions</code> with realized <code>exit_price</code> and <code>gain_pct</code>; <code>/portfolio/attribution</code> and the VPS dashboard benchmark against <code>IWM</code> and <code>SPY</code></li>
+          <li><strong>Drawdown-prioritized re-evaluation:</strong> weekday re-eval (<code>src/reeval_portfolio.py</code>) skips <code>delisted</code> tickers and inspects <code>gain_pct ≤ −25%</code> (followed by <code>≥ +50%</code>) before slicing <code>--limit</code></li>
+          <li><strong>Self-healing free model routing &amp; HF sync:</strong> replaced retired Nemotron Super with <code>google/gemma-4-31b-it:free</code>, added 1h live OpenRouter <code>/api/v1/models</code> <code>:free</code> filtering, automated Space sync via <code>.github/workflows/sync-hf.yml</code>, and expanded VPS API tests to 71 passing checks</li>
         </ul>
       </div>
 
@@ -773,6 +881,8 @@
   <div class="container">
     <div class="foot-links">
       <a href="https://github.com/CiscoPonce/primogreedy" target="_blank" rel="noopener">GitHub Repository</a>
+      <a href="https://huggingface.co/spaces/CiscsoPonce/PrimoGreedy-Agent" target="_blank" rel="noopener">Live HF Space</a>
+      <a href="#overview">Overview</a>
       <a href="#architecture">Architecture</a>
       <a href="#models">Models</a>
       <a href="#modules">Modules</a>
