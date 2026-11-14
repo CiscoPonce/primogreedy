@@ -8,6 +8,8 @@ alpha signal in micro-cap investing — via a cached lookup so scoring a whole
 candidate list costs at most a handful of API calls.
 """
 
+import os
+import time
 from src.core.logger import get_logger
 from src.finance_tools import calculate_graham_number
 
@@ -15,6 +17,66 @@ logger = get_logger(__name__)
 
 # Insider signal cache: ticker -> result dict (avoid re-fetching within a run).
 _INSIDER_CACHE: dict[str, dict] = {}
+_ATTR_CACHE: dict = {"by_region": None, "ts": 0.0}
+_ATTR_TTL = 600
+
+
+def _infer_region(ticker: str) -> str:
+    upper = (ticker or "").upper()
+    if upper.endswith(".L"):
+        return "UK"
+    if upper.endswith((".TO", ".V", ".CN", ".NE")):
+        return "Canada"
+    if upper.endswith(".AX"):
+        return "Australia"
+    if "." in upper:
+        return "Other"
+    return "USA"
+
+
+def fetch_attribution_weights() -> dict[str, dict]:
+    """Fetch regional win/return attribution from the VPS API (TTL-cached)."""
+    now = time.time()
+    if _ATTR_CACHE["by_region"] is not None and now - _ATTR_CACHE["ts"] < _ATTR_TTL:
+        return _ATTR_CACHE["by_region"]
+    vps_url = os.getenv("VPS_API_URL", "").rstrip("/")
+    if not vps_url:
+        return {}
+    try:
+        import requests
+        headers = {}
+        if os.getenv("VPS_API_KEY"):
+            headers["X-API-Key"] = os.getenv("VPS_API_KEY")
+        resp = requests.get(f"{vps_url}/portfolio/attribution", headers=headers, timeout=8)
+        if resp.ok:
+            by_region = resp.json().get("by_region") or {}
+            _ATTR_CACHE["by_region"] = by_region
+            _ATTR_CACHE["ts"] = now
+            return by_region
+    except Exception as exc:
+        logger.debug("Attribution fetch skipped: %s", exc)
+    return {}
+
+
+def _attribution_adjustment(ticker: str, by_region: dict[str, dict]) -> tuple[int, str | None]:
+    """Return bounded (-8..+8) score adjustment from historical regional win rate."""
+    stats = by_region.get(_infer_region(ticker))
+    if not stats or (stats.get("priced_count") or 0) < 5:
+        return 0, None
+    win_rate = stats.get("win_rate_pct", 0.0)
+    avg_ret = stats.get("avg_return_pct", 0.0)
+    adj = 0
+    if win_rate >= 45.0 or avg_ret >= 20.0:
+        adj = 6 if (win_rate >= 45.0 and avg_ret >= 20.0) else 4
+    elif win_rate < 20.0 and avg_ret < -10.0:
+        adj = -6
+    elif avg_ret < 0:
+        adj = -3
+    if adj == 0:
+        return 0, None
+    region = _infer_region(ticker)
+    sign = "+" if adj > 0 else ""
+    return adj, f"{sign}{adj} {region} attribution ({win_rate:.0f}% win, {avg_ret:+.1f}% avg)"
 
 
 def _insider_signal(ticker: str) -> dict | None:
@@ -31,7 +93,8 @@ def _insider_signal(ticker: str) -> dict | None:
     return result
 
 
-def score_candidate(candidate: dict, use_insider: bool = True) -> dict:
+def score_candidate(candidate: dict, use_insider: bool = True,
+                    use_attribution: bool = True) -> dict:
     """Score a single candidate dict (as returned by ``screen_microcaps``).
 
     Returns the same dict with ``score`` (0-100), ``score_breakdown`` and
@@ -121,6 +184,15 @@ def score_candidate(candidate: dict, use_insider: bool = True) -> dict:
     elif dollar_vol >= 250_000:
         score += 3
         breakdown.append("+3 liquid (>$250k/day)")
+
+    # 10. Empirical regional attribution adjustment (-6..+6 pts)
+    if use_attribution:
+        by_region = fetch_attribution_weights()
+        if by_region:
+            adj, reason = _attribution_adjustment(candidate.get("ticker", ""), by_region)
+            if adj:
+                score += adj
+                breakdown.append(reason)
 
     candidate["score"] = score
     candidate["score_breakdown"] = breakdown

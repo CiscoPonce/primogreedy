@@ -89,6 +89,40 @@ Rules (never break these):
 _cached_prompt: str | None = None
 
 
+def get_attribution_lessons() -> str:
+    """Return a concise historical winner/loser calibration note from VPS attribution."""
+    vps_url = os.getenv("VPS_API_URL", "").rstrip("/")
+    if not vps_url:
+        return ""
+    try:
+        import requests
+        headers = {}
+        if os.getenv("VPS_API_KEY"):
+            headers["X-API-Key"] = os.getenv("VPS_API_KEY")
+        resp = requests.get(f"{vps_url}/portfolio/attribution", headers=headers, timeout=6)
+        if not resp.ok:
+            return ""
+        data = resp.json()
+        wins = data.get("top_winners") or []
+        losses = data.get("top_losers") or []
+        if not wins and not losses:
+            return ""
+        w_str = ", ".join(f"{w['ticker']} ({w['gain_pct']:+.0f}%)" for w in wins[:3])
+        l_str = ", ".join(f"{l['ticker']} ({l['gain_pct']:+.0f}%)" for l in losses[:3])
+        ov = data.get("overall") or {}
+        note = (
+            f"\nPORTFOLIO CALIBRATION (historical outcomes — win rate {ov.get('win_rate_pct', 0):.1f}%, "
+            f"median {ov.get('median_return_pct', 0):+.1f}%):\n"
+            f"- Top historical winners: {w_str or 'n/a'}\n"
+            f"- Top historical losers: {l_str or 'n/a'}\n"
+            "Check carefully for the failure patterns of past losers (value traps, dilution, illiquidity) before issuing BUY.\n"
+        )
+        return note.replace("{", "{{").replace("}", "}}")
+    except Exception as exc:
+        logger.debug("Attribution lessons skipped: %s", exc)
+        return ""
+
+
 def get_analyst_prompt() -> str:
     """Return the Senior Broker prompt template string.
 
@@ -120,11 +154,11 @@ def get_analyst_prompt() -> str:
             messages = hub_prompt.messages
             if messages:
                 template_str = messages[0].prompt.template
-                _cached_prompt = template_str
+                _cached_prompt = template_str + get_attribution_lessons()
                 return _cached_prompt
         except Exception as exc:
             logger.debug("Hub prompt unavailable, using local template: %s", exc)
 
     logger.info("Using local Senior Broker prompt template")
-    _cached_prompt = SENIOR_BROKER_TEMPLATE
+    _cached_prompt = SENIOR_BROKER_TEMPLATE + get_attribution_lessons()
     return _cached_prompt

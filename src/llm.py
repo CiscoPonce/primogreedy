@@ -23,15 +23,15 @@ _llm_instance = None
 # complete if the specific models above are de-listed or rate-limited.
 MODEL_CHAIN = [
     "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-31b-it:free",
     "dots-studio/dots-3-note-preview:free",
+    "nvidia/nemotron-3.5-lightning:free",
     "openrouter/free",
 ]
 
 # Preferred structured-output model.  Override with the STRUCTURED_MODEL env
-# var to force the strongest free reasoner
-# ("nvidia/nemotron-3-ultra-550b-a55b:free") at the cost of latency.
-STRUCTURED_MODEL = os.getenv("STRUCTURED_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+# var to force a specific free model.
+STRUCTURED_MODEL = os.getenv("STRUCTURED_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 
 # Structured-output fallbacks, tried in order by invoke_structured() so a
 # rate-limited model degrades to another structured-capable one instead of
@@ -40,11 +40,53 @@ STRUCTURED_MODEL = os.getenv("STRUCTURED_MODEL", "nvidia/nemotron-3-super-120b-a
 STRUCTURED_CHAIN = [STRUCTURED_MODEL] + [
     m for m in (
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        "google/gemma-4-31b-it:free",
+        "dots-studio/dots-3-note-preview:free",
         "openrouter/free",
     )
     if m != STRUCTURED_MODEL
 ]
+
+_LIVE_FREE_CACHE: dict = {"models": None, "ts": 0.0}
+_LIVE_FREE_TTL = 3600
+
+
+def _live_free_models() -> set[str] | None:
+    """Return current OpenRouter :free model IDs (cached 1h), or None if offline."""
+    now = time.time()
+    if _LIVE_FREE_CACHE["models"] is not None and now - _LIVE_FREE_CACHE["ts"] < _LIVE_FREE_TTL:
+        return _LIVE_FREE_CACHE["models"]
+    try:
+        import json
+        import urllib.request
+
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/models",
+            headers={"User-Agent": "PrimoGreedy/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode()).get("data", [])
+        ids = {
+            m["id"]
+            for m in data
+            if m.get("id", "").endswith(":free") or m.get("id") == "openrouter/free"
+        }
+        if ids:
+            _LIVE_FREE_CACHE["models"] = ids
+            _LIVE_FREE_CACHE["ts"] = now
+            return ids
+    except Exception:
+        pass
+    return None
+
+
+def _filter_available_models(chain: list[str]) -> list[str]:
+    """Drop de-listed :free models when OpenRouter's catalog is reachable."""
+    live = _live_free_models()
+    if not live:
+        return chain
+    filtered = [m for m in chain if m in live or m == "openrouter/free"]
+    return filtered or chain
 
 
 def get_llm() -> ChatOpenAI:
@@ -115,8 +157,9 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm
         raise ValueError("OPENROUTER_API_KEY not found.")
 
     last_error = None
+    active_chain = _filter_available_models(MODEL_CHAIN)
 
-    for model_id in MODEL_CHAIN:
+    for model_id in active_chain:
         for attempt in range(max_retries):
             try:
                 llm = ChatOpenAI(
@@ -133,11 +176,14 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm
                     metadata={
                         "model_id": model_id,
                         "attempt": attempt + 1,
-                        "fallback_position": MODEL_CHAIN.index(model_id),
+                        "fallback_position": active_chain.index(model_id),
                     },
                 )
 
                 response = llm.invoke(prompt, config=config)
+                content = (response.content or "").strip()
+                if not content:
+                    raise RuntimeError(f"Empty completion from {model_id}")
                 logger.info("LLM response from %s (attempt %d)", model_id, attempt + 1)
                 return response.content
             except Exception as exc:
@@ -177,7 +223,7 @@ def invoke_structured(prompt: str, schema, max_tokens: int = 8192):
         raise ValueError("OPENROUTER_API_KEY not found.")
 
     last_error = None
-    for model_id in STRUCTURED_CHAIN:
+    for model_id in _filter_available_models(STRUCTURED_CHAIN):
         try:
             llm = get_structured_llm(model=model_id, max_tokens=max_tokens)
             result = llm.with_structured_output(schema).invoke(prompt)

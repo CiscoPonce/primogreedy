@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 # 2026-10-12 benchmark showed returning empty/truncated completions and
 # rate-limiting constantly. Ultra-550B is the strongest free reasoner.
 PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
-SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "google/gemma-4-31b-it:free")
 # Judge is the structured-output role; default to the dedicated JSON model so
 # it stays DISTINCT from pitcher and skeptic.  _judge_model_chain() falls back
 # through MODEL_CHAIN if it is rate-limited.

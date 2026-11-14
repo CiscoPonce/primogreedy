@@ -265,6 +265,28 @@ check("USA seed pool non-empty", len(screener._SEED_POOLS["USA"]) >= 40)
 check("UK seed pool non-empty", len(screener._SEED_POOLS["UK"]) >= 10)
 
 # ---------------------------------------------------------------------------
+# Attribution weighting & live free-model filter
+# ---------------------------------------------------------------------------
+print("\n== Attribution scoring & live model filter ==")
+_attr_sample = {
+    "USA": {"priced_count": 20, "win_rate_pct": 50.0, "avg_return_pct": 30.0},
+    "Canada": {"priced_count": 10, "win_rate_pct": 10.0, "avg_return_pct": -20.0},
+}
+adj_us, reason_us = scoring._attribution_adjustment("ACME", _attr_sample)
+adj_ca, reason_ca = scoring._attribution_adjustment("ACME.TO", _attr_sample)
+check("positive USA attribution boosts score", adj_us > 0 and reason_us)
+check("negative Canada attribution penalises score", adj_ca < 0 and reason_ca)
+
+import src.llm as llm_mod
+_orig_live = llm_mod._live_free_models
+llm_mod._live_free_models = lambda: {"google/gemma-4-31b-it:free", "openrouter/free"}
+try:
+    filtered = llm_mod._filter_available_models(["retired/model:free", "google/gemma-4-31b-it:free", "openrouter/free"])
+    check("filters out retired free models", filtered == ["google/gemma-4-31b-it:free", "openrouter/free"], filtered)
+finally:
+    llm_mod._live_free_models = _orig_live
+
+# ---------------------------------------------------------------------------
 print("\n========================================")
 print(f"RESULT: {PASSED} passed, {FAILED} failed")
 print("========================================")

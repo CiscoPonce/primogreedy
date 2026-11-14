@@ -1,0 +1,37 @@
+name: Sync Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync-space:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push main to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN secret not set — skipping Hugging Face Space sync."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cat << 'EOF' > /tmp/hf_askpass.sh
+          #!/bin/sh
+          case "$1" in
+            *Username*) echo "CiscsoPonce" ;;
+            *Password*) printf '%s' "$HF_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 /tmp/hf_askpass.sh
+          GIT_ASKPASS=/tmp/hf_askpass.sh git fetch https://huggingface.co/spaces/CiscsoPonce/PrimoGreedy-Agent main:hf_main
+          git merge -X ours --no-edit hf_main -m "chore: sync GitHub main to Hugging Face Space"
+          GIT_ASKPASS=/tmp/hf_askpass.sh git push https://huggingface.co/spaces/CiscsoPonce/PrimoGreedy-Agent HEAD:main
+          rm -f /tmp/hf_askpass.sh

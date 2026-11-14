@@ -70,6 +70,8 @@ def fetch_us_tickers() -> list[dict]:
 
     seen = {}
     for trade in resp.json():
+        if trade.get("status") == "delisted":
+            continue
         ticker = trade["ticker"]
         if ("." not in ticker
                 and ticker not in SKIP_TICKERS
@@ -77,6 +79,32 @@ def fetch_us_tickers() -> list[dict]:
             if ticker not in seen or trade["date"] > seen[ticker]["date"]:
                 seen[ticker] = trade
     return list(seen.values())
+
+
+def _prioritize_trades_by_drawdown(trades: list[dict]) -> list[dict]:
+    """Order trades so large drawdowns (<= -25%) and oldest entries run first."""
+    if not VPS_API_URL or not trades:
+        return trades
+    gain_map: dict[str, float] = {}
+    try:
+        resp = requests.get(f"{VPS_API_URL}/portfolio/evaluate", headers=_vps_headers(), timeout=15)
+        if resp.ok:
+            for item in resp.json().get("trades", []):
+                if item.get("gain_pct") is not None:
+                    gain_map[item["ticker"]] = float(item["gain_pct"])
+    except Exception as exc:
+        logger.debug("Drawdown prioritization fallback (evaluate unavailable): %s", exc)
+        return trades
+
+    def _priority(t: dict) -> tuple[int, float, str]:
+        g = gain_map.get(t["ticker"])
+        if g is not None and g <= -25.0:
+            return (0, g, str(t.get("date", "")))
+        if g is not None and g >= 50.0:
+            return (1, -g, str(t.get("date", "")))
+        return (2, g if g is not None else 0.0, str(t.get("date", "")))
+
+    return sorted(trades, key=_priority)
 
 
 def analyse_ticker(ticker: str, company_name: str, info: dict) -> Optional[dict]:
@@ -295,7 +323,7 @@ def main():
                 os.getenv("USE_DEBATE", "false"))
     logger.info("=" * 60)
 
-    trades = fetch_us_tickers()
+    trades = _prioritize_trades_by_drawdown(fetch_us_tickers())
     if not trades:
         logger.info("No US tickers found in VPS portfolio.")
         return
