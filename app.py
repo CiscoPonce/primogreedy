@@ -1,5 +1,6 @@
-import chainlit as cl
 import gc
+import re
+import chainlit as cl
 import matplotlib.pyplot as plt
 from src.agent import app
 from src.social_scout import fetch_tickers_from_social
@@ -7,6 +8,13 @@ from src.scanner import get_trending_stocks
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+_TICKER_RE = re.compile(r"^[A-Z0-9]{1,6}(?:\.[A-Z]{1,3})?$")
+
+
+def _session_thread_id() -> str:
+    """Return a per-visitor thread ID so HF Space users do not share state."""
+    return cl.user_session.get("id") or "ui_session"
 
 
 @cl.on_chat_start
@@ -90,7 +98,7 @@ async def main(message: cl.Message):
     elif " " in user_input:
         await cl.Message(content="Consulting Senior Broker...").send()
         try:
-            config = {"configurable": {"thread_id": "ui_session"}, "recursion_limit": 30}
+            config = {"configurable": {"thread_id": _session_thread_id()}, "recursion_limit": 30}
             result = await app.ainvoke(
                 {"ticker": user_input, "retry_count": 0, "manual_search": False},
                 config=config,
@@ -105,14 +113,14 @@ async def main(message: cl.Message):
     # 6. SINGLE OR COMMA-SEPARATED TICKERS
     else:
         raw_list = user_input.upper().replace(",", " ").split()
-        tickers = [t for t in raw_list if len(t) <= 5 and t.isalpha()]
+        tickers = [t for t in raw_list if _TICKER_RE.fullmatch(t)]
         if not tickers and " " not in user_input:
             tickers = [user_input.upper()]
 
     for ticker in tickers:
         await cl.Message(content=f"--- **Processing:** {ticker} ---").send()
         try:
-            config = {"configurable": {"thread_id": "ui_session"}, "recursion_limit": 30}
+            config = {"configurable": {"thread_id": _session_thread_id()}, "recursion_limit": 30}
             result = await app.ainvoke(
                 {"ticker": ticker, "retry_count": 0, "manual_search": True},
                 config=config,

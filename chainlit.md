@@ -1,14 +1,14 @@
-# Welcome to Chainlit! 🚀🤖
+# PrimoGreedy Agent
 
-Hi there, Developer! 👋 We're excited to have you on board. Chainlit is a powerful tool designed to help you prototype, debug and share applications built on top of LLMs.
+Welcome to **PrimoGreedy**, an AI-driven micro-cap and small-cap equity research agent built on **LangGraph**. It combines a strict quantitative **Logic Firewall** (market cap, price, and cash-runway checks) with SEC EDGAR filings, Finnhub fundamentals, and **Kelly Criterion** position sizing.
 
-## Useful Links 🔗
+## Quick Commands
 
-- **Documentation:** Get started with our comprehensive [Chainlit Documentation](https://docs.chainlit.io) 📚
-- **Discord Community:** Join our friendly [Chainlit Discord](https://discord.gg/k73SQ3FyUh) to ask questions, share your projects, and connect with other developers! 💬
+- **`AUTO`** — Run a live scan across yFinance screeners and Brave trending stocks
+- **`NVDA`** (or comma-separated like `AAPL, TET.L`) — Deep-dive single-ticker analysis (US & international tickers supported)
+- **`@Handle`** — Scout tickers mentioned by an X/Twitter handle
+- **`PORTFOLIO`** — View the agent's paper-trading track record with live P&L
+- **`BACKTEST`** — Backtest the paper portfolio against Buy & Hold
+- **Any question** — Chat directly with the Senior Broker agent
 
-We can't wait to see what you create with Chainlit! Happy coding! 💻😊
-
-## Welcome screen
-
-To modify the welcome screen, edit the `chainlit.md` file at the root of your project. If you do not want a welcome screen, just leave this file empty.
+> **Disclaimer:** PrimoGreedy is an automated research and paper-trading experiment for educational purposes only. Nothing here is financial or investment advice.
