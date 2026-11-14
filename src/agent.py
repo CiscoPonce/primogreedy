@@ -171,7 +171,7 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
             "currentPrice": raw_info.get("currentPrice", 0) or raw_info.get("regularMarketPrice", 0),
             "trailingEps": raw_info.get("trailingEps", 0),
             "bookValue": raw_info.get("bookValue", 0),
-            "marketCap": raw_info.get("marketCap", 0),
+            "marketCap": raw_info.get("marketCap", 0) or 0,
             "ebitda": raw_info.get("ebitda", 0),
             "sector": raw_info.get("sector", "Unknown"),
             "freeCashflow": raw_info.get("freeCashflow", 0),
@@ -181,9 +181,35 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
         del raw_info
         gc.collect()
 
+        # Fallback when yfinance .info is rate-limited/incomplete (common on HF Spaces)
+        if not lean_info["currentPrice"] or not lean_info["marketCap"]:
+            try:
+                fi = stock.fast_info
+                if not lean_info["currentPrice"]:
+                    lean_info["currentPrice"] = fi.get("lastPrice") or fi.get("previousClose") or 0
+                if not lean_info["marketCap"]:
+                    lean_info["marketCap"] = fi.get("marketCap") or 0
+            except Exception as fi_exc:
+                logger.debug("fast_info fallback failed for %s: %s", ticker, fi_exc)
+
+        if not lean_info["marketCap"] and os.getenv("FINNHUB_API_KEY"):
+            try:
+                import requests
+                resp = requests.get(
+                    "https://finnhub.io/api/v1/stock/profile2",
+                    params={"symbol": ticker, "token": os.getenv("FINNHUB_API_KEY")},
+                    timeout=8,
+                )
+                if resp.ok:
+                    mc_millions = resp.json().get("marketCapitalization") or 0
+                    if mc_millions:
+                        lean_info["marketCap"] = float(mc_millions) * 1_000_000
+            except Exception as fh_exc:
+                logger.debug("Finnhub profile2 fallback failed for %s: %s", ticker, fh_exc)
+
         price = normalize_price(lean_info["currentPrice"], ticker, lean_info["currency"])
         lean_info["currentPrice"] = price
-        mkt_cap = lean_info["marketCap"]
+        mkt_cap = lean_info["marketCap"] or 0
 
         chart_bytes = generate_chart(ticker)
 
@@ -201,6 +227,11 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
             return Command(update=update, goto=_gatekeeper_route(state, update))
 
         if not (MIN_MARKET_CAP < mkt_cap < MAX_MARKET_CAP):
+            cap_msg = (
+                f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range."
+                if mkt_cap > 0
+                else "Market Cap unavailable (data providers returned no cap data)."
+            )
             update = {
                 "market_cap": mkt_cap,
                 "is_small_cap": False,
@@ -208,7 +239,7 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
                 "company_name": ticker,
                 "financial_data": lean_info,
                 "retry_count": retries + 1,
-                "final_report": f"Market Cap ${mkt_cap:,.0f} is outside the $10M-$300M range.",
+                "final_report": cap_msg,
                 "chart_data": chart_bytes,
             }
             return Command(update=update, goto=_gatekeeper_route(state, update))
