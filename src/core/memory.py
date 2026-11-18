@@ -1,6 +1,8 @@
 import json
 import os
 import time
+from pathlib import Path
+
 import requests
 from .logger import get_logger
 
@@ -18,6 +20,58 @@ def _vps_headers() -> dict:
     return {"X-API-Key": VPS_API_KEY, "Content-Type": "application/json"}
 
 
+def _https_verify():
+    """CA bundle for the self-signed VPS certificate, when one is configured."""
+    bundle = os.getenv("REQUESTS_CA_BUNDLE")
+    if bundle:
+        return bundle
+    cert = Path(__file__).resolve().parents[2] / "vps" / "pg.crt"
+    return str(cert) if cert.is_file() else True
+
+
+def _vps_request(method: str, path: str, **kwargs) -> requests.Response:
+    """Call the VPS API.
+
+    Caddy on port 8080 speaks TLS only. An ``http://`` URL gets
+    ``400 Client sent an HTTP request to an HTTPS server`` (or a
+    connection reset). Retry that one case over HTTPS with the
+    project certificate. A real API 400 is returned as-is.
+    """
+    url = f"{VPS_API_URL}{path}"
+    try:
+        resp = requests.request(
+            method, url, headers=_vps_headers(), timeout=5, **kwargs,
+        )
+    except requests.RequestException:
+        if not VPS_API_URL.startswith("http://"):
+            raise
+        logger.info("VPS HTTP call failed; retrying %s over HTTPS", path)
+        return requests.request(
+            method,
+            "https://" + VPS_API_URL[len("http://"):] + path,
+            headers=_vps_headers(),
+            timeout=5,
+            verify=_https_verify(),
+            **kwargs,
+        )
+
+    if (
+        resp.status_code == 400
+        and VPS_API_URL.startswith("http://")
+        and b"HTTPS server" in resp.content
+    ):
+        logger.info("VPS API rejected plain HTTP; retrying %s over HTTPS", path)
+        resp = requests.request(
+            method,
+            "https://" + VPS_API_URL[len("http://"):] + path,
+            headers=_vps_headers(),
+            timeout=5,
+            verify=_https_verify(),
+            **kwargs,
+        )
+    return resp
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -30,7 +84,7 @@ def load_seen_tickers() -> dict[str, float]:
     """
     if VPS_API_URL:
         try:
-            resp = requests.get(f"{VPS_API_URL}/seen-tickers", headers=_vps_headers(), timeout=5)
+            resp = _vps_request("GET", "/seen-tickers")
             resp.raise_for_status()
             data = resp.json()
             logger.debug("Loaded %d seen tickers from VPS", len(data))
@@ -45,11 +99,9 @@ def mark_ticker_seen(ticker: str, region: str = "USA") -> None:
     """Record a ticker as recently analysed."""
     if VPS_API_URL:
         try:
-            resp = requests.post(
-                f"{VPS_API_URL}/seen-tickers",
-                headers=_vps_headers(),
+            resp = _vps_request(
+                "POST", "/seen-tickers",
                 json={"ticker": ticker, "region": region},
-                timeout=5,
             )
             resp.raise_for_status()
             logger.debug("Marked %s as seen on VPS", ticker)

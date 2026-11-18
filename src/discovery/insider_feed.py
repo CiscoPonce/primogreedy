@@ -8,6 +8,7 @@ import os
 import re
 from datetime import datetime, timedelta
 import requests
+from src.core.finnhub_http import finnhub_get
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +40,7 @@ def get_insider_buys(ticker: str) -> dict:
     }
 
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = finnhub_get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
@@ -159,7 +160,7 @@ def _fallback_finnhub_insider_feed(max_items: int = 20) -> list[dict]:
         return []
 
     try:
-        resp = requests.get(
+        resp = finnhub_get(
             "https://finnhub.io/api/v1/stock/insider-transactions",
             params={
                 "symbol": "",  # blank = latest across all tickers

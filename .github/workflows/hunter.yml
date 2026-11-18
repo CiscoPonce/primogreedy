@@ -53,6 +53,7 @@ jobs:
           python tests/test_discovery_improvements.py
           python tests/test_value_improvements.py
           python tests/test_online_eval.py
+          python tests/test_ops_fixes.py
 
       - name: Run The Marathon
         env:

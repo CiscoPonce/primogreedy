@@ -163,8 +163,17 @@ def get_insider_sentiment(ticker: str) -> str:
             return "FINNHUB_API_KEY missing."
 
         symbol = _finnhub_symbol(ticker)
-        url = f"https://finnhub.io/api/v1/stock/insider-sentiment?symbol={symbol}&from=2024-01-01&to=2026-12-31&token={api_key}"
-        response = requests.get(url, timeout=10)
+        from src.core.finnhub_http import finnhub_get
+        response = finnhub_get(
+            "https://finnhub.io/api/v1/stock/insider-sentiment",
+            params={
+                "symbol": symbol,
+                "from": "2024-01-01",
+                "to": "2026-12-31",
+                "token": api_key,
+            },
+            timeout=10,
+        )
         response.raise_for_status()
         data = response.json()
 

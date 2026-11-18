@@ -194,8 +194,8 @@ def gatekeeper_node(state) -> Command[Literal["analyst", "scout"]]:
 
         if not lean_info["marketCap"] and os.getenv("FINNHUB_API_KEY"):
             try:
-                import requests
-                resp = requests.get(
+                from src.core.finnhub_http import finnhub_get
+                resp = finnhub_get(
                     "https://finnhub.io/api/v1/stock/profile2",
                     params={"symbol": ticker, "token": os.getenv("FINNHUB_API_KEY")},
                     timeout=8,
