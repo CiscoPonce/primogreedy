@@ -365,3 +365,9 @@ primogreedy/
 ## The Philosophy
 
 PrimoGreedy does not try to predict the future. It relies on strict **Benjamin Graham** math (`Intrinsic Value = sqrt(22.5 * EPS * BookValue)`) to establish a baseline Margin of Safety, then applies **Peter Lynch's** logic to find the catalyst and **Charlie Munger's** inversion to find the catch. It is designed to say **AVOID** far more often than it says **BUY**.
+
+---
+
+## Attribution
+
+The multi-agent workflow this project grew from is described in Botunac, I. (2025). Implementation of a multi-agent artificial intelligence system for financial trading decision-making. *Oeconomica Jadertina*, 15(2), 90-115. [https://doi.org/10.15291/oec.4863](https://doi.org/10.15291/oec.4863). The paper is in Croatian, with an English abstract. Original repository: [PrimoAgent](https://github.com/ivebotunac/PrimoAgent).
