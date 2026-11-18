@@ -116,6 +116,74 @@ if os.path.exists("seen_tickers.json"):
     local = open("seen_tickers.json").read()
 check("local ledger is not used when HTTPS succeeds", "OPSFIX" not in local)
 
+print("\n== Debate stays on the free tier ==")
+
+import threading
+import src.agents.debate as debate
+
+pitcher = debate.PITCHER_MODEL
+skeptic_fb = debate._fallback_for(debate.SKEPTIC_MODEL)
+pitcher_fb = debate._fallback_for(debate.PITCHER_MODEL)
+check("skeptic backup is not the pitcher", skeptic_fb != pitcher, skeptic_fb)
+check("pitcher backup is not the skeptic", pitcher_fb != debate.SKEPTIC_MODEL, pitcher_fb)
+
+calls = []
+sleeps = []
+
+
+class _Msg:
+    def __init__(self, content):
+        self.content = content
+
+
+class _LLM:
+    def __init__(self, model):
+        self.model = model
+
+    def invoke(self, prompt):
+        calls.append(self.model)
+        if self.model == debate.SKEPTIC_MODEL:
+            raise RuntimeError("429 Too Many Requests")
+        return _Msg("bear case")
+
+
+debate._make_llm = lambda model, max_tokens=2048: _LLM(model)
+debate.time.sleep = lambda seconds: sleeps.append(seconds)
+text = debate._resilient_llm_call(
+    debate.SKEPTIC_MODEL, "prompt", debate._fallback_for(debate.SKEPTIC_MODEL),
+)
+check("429 switches after one wait", text == "bear case" and calls.count(debate.SKEPTIC_MODEL) == 1, calls)
+check("429 does not camp on the same model", calls.count(debate.SKEPTIC_MODEL) < 2)
+check("fallback call is the non-pitcher model", calls[-1] == skeptic_fb, calls)
+
+overlap = {"n": 0, "max": 0}
+gate = threading.Lock()
+
+
+def _fake_invoke(state):
+    with gate:
+        overlap["n"] += 1
+        overlap["max"] = max(overlap["max"], overlap["n"])
+    import time as real_time
+    real_time.sleep(0.05)
+    with gate:
+        overlap["n"] -= 1
+    return {"final_verdict": "v", "bull_case": "b", "bear_case": "r", "_structured_result": None}
+
+
+debate.debate_app.invoke = _fake_invoke
+kwargs = dict(
+    ticker="T", company_name="C", financial_data_summary="f",
+    deep_fundamentals="d", sec_context="s", strategy="GRAHAM CLASSIC",
+    price=1.0, eps=0.1, book_value=1.0, ebitda=1.0,
+)
+threads = [threading.Thread(target=debate.run_debate, kwargs=kwargs) for _ in range(2)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+check("debates do not overlap", overlap["max"] == 1, overlap)
+
 print()
 if failures:
     print(f"{len(failures)} FAIL")

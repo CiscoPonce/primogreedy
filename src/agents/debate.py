@@ -19,6 +19,7 @@ path fails it raises so the caller can fall back to the single-LLM analyst.
 import os
 import json
 import re
+import threading
 import time
 import warnings
 from typing import TypedDict
@@ -48,12 +49,15 @@ _DEBATE_DELAY = int(os.getenv("DEBATE_DELAY_SECONDS", "10"))
 
 
 def _fallback_for(primary: str) -> str:
-    """Return the first MODEL_CHAIN entry that differs from ``primary``.
+    """Next free model that is not this role and not another role's primary.
 
-    The old code passed ``MODEL_CHAIN[0]`` as the fallback, which was identical
-    to the pitcher default — so a rate-limited primary had no real backup and
-    the log read "both <model> and <model> failed".
+    A rate-limited skeptic must not fall through onto the pitcher's model:
+    four regions were doing that at once and exhausting both.
     """
+    reserved = {PITCHER_MODEL, SKEPTIC_MODEL, JUDGE_MODEL} - {primary}
+    for m in MODEL_CHAIN:
+        if m != primary and m not in reserved:
+            return m
     for m in MODEL_CHAIN:
         if m != primary:
             return m
@@ -146,44 +150,57 @@ def _make_llm(model: str, max_tokens: int = 2048):
 
 
 def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
-    time.sleep(_DEBATE_DELAY)  # Initial spacing
+    """Call ``model``, then ``fallback_model``.
 
-    llm = _make_llm(model)
-    # Try primary model with backoff
-    for attempt in range(4):
-        try:
-            content = message_text(llm.invoke(prompt).content).strip()
-            if content:  # Guard against empty completions
-                return content
-            logger.warning("Empty response from %s (attempt %d); retrying...", model, attempt + 1)
-            time.sleep(5)
-        except Exception as exc:
-            if "429" in str(exc):
-                sleep_time = 15 * (attempt + 1)
-                logger.warning("Rate limit on %s (attempt %d). Sleeping %ds...", model, attempt + 1, sleep_time)
-                time.sleep(sleep_time)
-            elif "404" in str(exc) or "too short" in str(exc):
-                break  # Fatal error, move to fallback
-            else:
-                logger.warning("Error on %s: %s", model, exc)
-                time.sleep(5)
-
-    # Fallback model
-    logger.warning("Primary model %s exhausted, switching to fallback %s", model, fallback_model)
-    fallback = _make_llm(fallback_model)
-    for attempt in range(3):
-        try:
-            content = message_text(fallback.invoke(prompt).content).strip()
+    A 429 waits once (the free tier is about 8 requests a minute) and moves
+    on. Camping on the same model for 15s, 30s, 45s and 60s is what stacked
+    four regions onto Gemma and then onto the pitcher's model.
+    """
+    last_error = None
+    seen = []
+    for candidate in (model, fallback_model):
+        if not candidate or candidate in seen:
+            continue
+        seen.append(candidate)
+        time.sleep(_DEBATE_DELAY)
+        llm = _make_llm(candidate)
+        switched = False
+        for attempt in range(2):
+            try:
+                content = message_text(llm.invoke(prompt).content).strip()
+            except Exception as exc:
+                last_error = exc
+                err = str(exc)
+                if "429" in err:
+                    logger.warning(
+                        "Rate limit on %s; waiting once then switching", candidate,
+                    )
+                    time.sleep(8)
+                    switched = True
+                    break
+                if "404" in err or "too short" in err:
+                    logger.warning("Model %s unavailable, switching", candidate)
+                    switched = True
+                    break
+                logger.warning("Error on %s: %s", candidate, exc)
+                switched = True
+                break
             if content:
                 return content
-            time.sleep(5)
-        except Exception as exc:
-            if "429" in str(exc):
-                time.sleep(20)
-            else:
+            if attempt == 0:
+                logger.warning("Empty response from %s; retrying once", candidate)
                 time.sleep(5)
+                continue
+            switched = True
+        if switched and candidate == model:
+            logger.warning(
+                "Primary model %s exhausted, switching to fallback %s",
+                model, fallback_model,
+            )
 
-    raise RuntimeError(f"Both {model} and {fallback_model} failed due to rate limits.")
+    raise RuntimeError(
+        f"Both {model} and {fallback_model} failed due to rate limits. Last error: {last_error}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -365,9 +382,12 @@ def _structured_verdict_invoke(prompt: str):
             except Exception as exc:
                 err = str(exc)
                 if "429" in err:
-                    sleep_time = 20 * (attempt + 1)
-                    logger.warning("Rate limit on judge model %s; sleeping %ds...", model, sleep_time)
-                    time.sleep(sleep_time)
+                    logger.warning(
+                        "Rate limit on judge model %s; waiting once then switching",
+                        model,
+                    )
+                    time.sleep(8)
+                    break
                 elif ("404" in err or "too short" in err or "does not have" in err
                         or "length limit" in err or "parse response content" in err):
                     # Unavailable model, or the free model hit its token cap
@@ -466,6 +486,10 @@ _debate_graph.add_edge("judge", END)
 
 debate_app = _debate_graph.compile()
 
+# Four regions fan out together. The free tier is per model, so only one
+# pitcher -> skeptic -> judge may be in flight or they all hit the same model.
+_debate_lock = threading.Lock()
+
 
 def run_debate(
     ticker: str,
@@ -515,7 +539,8 @@ def run_debate(
         "enterprise_value": enterprise_value,
     }
 
-    result = debate_app.invoke(initial_state)
+    with _debate_lock:
+        result = debate_app.invoke(initial_state)
     return {
         "final_verdict": result.get("final_verdict", ""),
         "bull_case": result.get("bull_case", ""),
