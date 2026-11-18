@@ -124,8 +124,12 @@ import src.agents.debate as debate
 pitcher = debate.PITCHER_MODEL
 skeptic_fb = debate._fallback_for(debate.SKEPTIC_MODEL)
 pitcher_fb = debate._fallback_for(debate.PITCHER_MODEL)
+skeptic_chain = debate._call_chain(debate.SKEPTIC_MODEL)
+check("skeptic starts on the router", debate.SKEPTIC_MODEL == "openrouter/free", debate.SKEPTIC_MODEL)
 check("skeptic backup is not the pitcher", skeptic_fb != pitcher, skeptic_fb)
 check("pitcher backup is not the skeptic", pitcher_fb != debate.SKEPTIC_MODEL, pitcher_fb)
+check("skeptic gets two backups", len(skeptic_chain) == 3, skeptic_chain)
+check("gemma is not the first skeptic", skeptic_chain[0] != "google/gemma-4-31b-it:free", skeptic_chain)
 
 calls = []
 sleeps = []
@@ -155,6 +159,24 @@ text = debate._resilient_llm_call(
 check("429 switches after one wait", text == "bear case" and calls.count(debate.SKEPTIC_MODEL) == 1, calls)
 check("429 does not camp on the same model", calls.count(debate.SKEPTIC_MODEL) < 2)
 check("fallback call is the non-pitcher model", calls[-1] == skeptic_fb, calls)
+
+third_calls = []
+
+
+class _LLMTwoFails:
+    def __init__(self, model):
+        self.model = model
+
+    def invoke(self, prompt):
+        third_calls.append(self.model)
+        if self.model != skeptic_chain[-1]:
+            raise RuntimeError("429 Too Many Requests")
+        return _Msg("third model")
+
+
+debate._make_llm = lambda model, max_tokens=2048: _LLMTwoFails(model)
+third = debate._resilient_llm_call(debate.SKEPTIC_MODEL, "prompt")
+check("third model runs after two rate limits", third == "third model" and third_calls == skeptic_chain, third_calls)
 
 overlap = {"n": 0, "max": 0}
 gate = threading.Lock()

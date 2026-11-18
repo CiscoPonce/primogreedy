@@ -37,7 +37,9 @@ logger = get_logger(__name__)
 # 2026-10-12 benchmark showed returning empty/truncated completions and
 # rate-limiting constantly. Ultra-550B is the strongest free reasoner.
 PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
-SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "google/gemma-4-31b-it:free")
+# Gemma's free pool is a shared upstream limit. Spacing cannot clear it, so
+# the skeptic starts on the OpenRouter router and only then tries a fixed model.
+SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "openrouter/free")
 # Judge is the structured-output role; default to the dedicated JSON model so
 # it stays DISTINCT from pitcher and skeptic.  _judge_model_chain() falls back
 # through MODEL_CHAIN if it is rate-limited.
@@ -48,20 +50,42 @@ JUDGE_MODEL = os.getenv("DEBATE_JUDGE_MODEL", "dots-studio/dots-3-note-preview:f
 _DEBATE_DELAY = int(os.getenv("DEBATE_DELAY_SECONDS", "10"))
 
 
-def _fallback_for(primary: str) -> str:
-    """Next free model that is not this role and not another role's primary.
+def _backup_candidates(primary: str) -> list[str]:
+    """Free models to try after ``primary``.
 
-    A rate-limited skeptic must not fall through onto the pitcher's model:
-    four regions were doing that at once and exhausting both.
+    Other roles are skipped so the skeptic does not land on the pitcher.
+    The router and Lightning come before Gemma, whose shared pool can be
+    refused for a whole hunt.
     """
     reserved = {PITCHER_MODEL, SKEPTIC_MODEL, JUDGE_MODEL} - {primary}
-    for m in MODEL_CHAIN:
-        if m != primary and m not in reserved:
-            return m
-    for m in MODEL_CHAIN:
-        if m != primary:
-            return m
-    return MODEL_CHAIN[-1]
+    gemma = "google/gemma-4-31b-it:free"
+    preferred = [
+        "openrouter/free",
+        "nvidia/nemotron-3.5-lightning:free",
+    ]
+    ordered = preferred + [m for m in MODEL_CHAIN if m not in preferred and m != gemma]
+    if gemma in MODEL_CHAIN:
+        ordered.append(gemma)
+    out = []
+    for m in ordered:
+        if m and m != primary and m not in reserved and m not in out:
+            out.append(m)
+    if not out:
+        for m in MODEL_CHAIN:
+            if m != primary and m not in out:
+                out.append(m)
+    return out
+
+
+def _fallback_for(primary: str) -> str:
+    """First backup for ``primary``. Kept for callers that want one model."""
+    chain = _backup_candidates(primary)
+    return chain[0] if chain else primary
+
+
+def _call_chain(primary: str) -> list[str]:
+    """Primary plus two backups. The debate used to die after the second."""
+    return [primary] + _backup_candidates(primary)[:2]
 
 
 class DebateState(TypedDict, total=False):
@@ -149,16 +173,19 @@ def _make_llm(model: str, max_tokens: int = 2048):
     )
 
 
-def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
-    """Call ``model``, then ``fallback_model``.
+def _resilient_llm_call(model: str, prompt: str, fallback_model: str | None = None) -> str:
+    """Call up to three free models.
 
-    A 429 waits once (the free tier is about 8 requests a minute) and moves
-    on. Camping on the same model for 15s, 30s, 45s and 60s is what stacked
-    four regions onto Gemma and then onto the pitcher's model.
+    A 429 waits once (about 8 requests a minute) and moves on. The chain is
+    the role model, then two backups that are not the other roles.
     """
+    chain = _call_chain(model)
+    if fallback_model and fallback_model not in chain:
+        chain = [model, fallback_model] + [m for m in chain if m != model]
+        chain = chain[:3]
     last_error = None
     seen = []
-    for candidate in (model, fallback_model):
+    for index, candidate in enumerate(chain):
         if not candidate or candidate in seen:
             continue
         seen.append(candidate)
@@ -192,14 +219,14 @@ def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
                 time.sleep(5)
                 continue
             switched = True
-        if switched and candidate == model:
+        if switched and index < len(chain) - 1:
             logger.warning(
-                "Primary model %s exhausted, switching to fallback %s",
-                model, fallback_model,
+                "Model %s exhausted, switching to %s",
+                candidate, chain[index + 1],
             )
 
     raise RuntimeError(
-        f"Both {model} and {fallback_model} failed due to rate limits. Last error: {last_error}"
+        f"Debate models failed ({', '.join(seen)}). Last error: {last_error}"
     )
 
 
