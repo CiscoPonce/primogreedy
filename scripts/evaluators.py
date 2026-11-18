@@ -85,14 +85,16 @@ def catalyst_grounding_score(run, example) -> dict:
 
         response = judge_llm.invoke(judge_prompt)
         import json
+        from src.llm import message_text
+        raw = message_text(response.content)
         try:
-            result = json.loads(response.content)
+            result = json.loads(raw)
             score = float(result.get("score", 0.5))
             reason = result.get("reason", "")
         except (json.JSONDecodeError, ValueError):
-            score_match = re.search(r"(\d+\.?\d*)", response.content)
+            score_match = re.search(r"(\d+\.?\d*)", raw)
             score = float(score_match.group(1)) if score_match else 0.5
-            reason = response.content[:200]
+            reason = raw[:200]
 
         return {"key": "catalyst_grounding", "score": max(0, min(1, score)), "comment": reason}
 
@@ -140,14 +142,16 @@ def company_identity_score(run, example) -> dict:
         )
 
         response = judge_llm.invoke(judge_prompt)
+        from src.llm import message_text
+        raw = message_text(response.content)
         try:
-            result = json.loads(response.content)
+            result = json.loads(raw)
             score = float(result.get("score", 0.5))
             reason = result.get("reason", "")
         except (json.JSONDecodeError, ValueError):
-            score_match = re.search(r"(\d+\.?\d*)", response.content)
+            score_match = re.search(r"(\d+\.?\d*)", raw)
             score = float(score_match.group(1)) if score_match else 0.5
-            reason = response.content[:200]
+            reason = raw[:200]
 
         return {"key": "company_identity", "score": max(0, min(1, score)), "comment": reason}
 

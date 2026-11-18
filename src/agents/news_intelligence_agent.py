@@ -6,6 +6,7 @@ from ..workflows.state import AgentState
 from ..tools.finnhub_tool import get_company_news
 from ..tools.firecrawl_tool import scrape_url
 from ..config.model_factory import ModelFactory
+from ..llm import message_text
 from ..config import config
 
 from ..prompts import (
@@ -91,7 +92,7 @@ async def assess_significance(
             'business_description': business_description
         })
         
-        significance_text = str(response.content).strip()
+        significance_text = message_text(response.content).strip()
         return max(0.0, min(1.0, float(significance_text)))
         
     except Exception as e:
@@ -139,7 +140,7 @@ async def create_enhanced_summary(title: str, original_summary: str, full_conten
             'symbol': symbol
         })
         
-        return str(response.content).strip()
+        return message_text(response.content).strip()
         
     except Exception as e:
         print(f"Enhanced summary failed: {e}")

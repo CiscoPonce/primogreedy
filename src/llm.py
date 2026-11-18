@@ -140,6 +140,32 @@ def get_structured_llm(model: str | None = None, max_tokens: int = 8192) -> Chat
     )
 
 
+def message_text(content) -> str:
+    """Return the text of a chat response.
+
+    A normal reply is a string. LangChain 1.5 can also return a list of
+    content blocks, including a refusal block. Callers in this repo expect text.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if isinstance(block, dict):
+                text = block.get("text") or block.get("refusal") or ""
+            else:
+                text = getattr(block, "text", None) or getattr(block, "refusal", None) or ""
+            if isinstance(text, str) and text:
+                parts.append(text)
+        return "".join(parts)
+    return str(content)
+
+
 def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm_call") -> str:
     """Invoke the LLM with automatic model fallback on 429 rate limits.
 
@@ -181,11 +207,11 @@ def invoke_with_fallback(prompt: str, max_retries: int = 2, run_name: str = "llm
                 )
 
                 response = llm.invoke(prompt, config=config)
-                content = (response.content or "").strip()
+                content = message_text(response.content).strip()
                 if not content:
                     raise RuntimeError(f"Empty completion from {model_id}")
                 logger.info("LLM response from %s (attempt %d)", model_id, attempt + 1)
-                return response.content
+                return content
             except Exception as exc:
                 last_error = exc
                 err_str = str(exc)

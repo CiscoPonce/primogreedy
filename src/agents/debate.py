@@ -27,7 +27,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.types import RetryPolicy
 
 from src.core.logger import get_logger
-from src.llm import MODEL_CHAIN
+from src.llm import MODEL_CHAIN, message_text
 from src.models.verdict import InvestmentVerdict
 
 logger = get_logger(__name__)
@@ -152,7 +152,7 @@ def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
     # Try primary model with backoff
     for attempt in range(4):
         try:
-            content = llm.invoke(prompt).content
+            content = message_text(llm.invoke(prompt).content).strip()
             if content:  # Guard against empty completions
                 return content
             logger.warning("Empty response from %s (attempt %d); retrying...", model, attempt + 1)
@@ -173,7 +173,7 @@ def _resilient_llm_call(model: str, prompt: str, fallback_model: str) -> str:
     fallback = _make_llm(fallback_model)
     for attempt in range(3):
         try:
-            content = fallback.invoke(prompt).content
+            content = message_text(fallback.invoke(prompt).content).strip()
             if content:
                 return content
             time.sleep(5)
@@ -400,7 +400,7 @@ def _verdict_from_plain_json(prompt: str):
     for model in _judge_model_chain():
         try:
             time.sleep(_DEBATE_DELAY)
-            raw = _make_llm(model, max_tokens=8192).invoke(json_prompt).content
+            raw = message_text(_make_llm(model, max_tokens=8192).invoke(json_prompt).content).strip()
         except Exception as exc:
             last_error = exc
             logger.warning("Plain-JSON judge model %s failed: %s", model, exc)
