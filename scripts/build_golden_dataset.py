@@ -10,6 +10,7 @@ in the LangSmith UI.
 """
 
 import argparse
+import asyncio
 import os
 import sys
 from datetime import datetime, timedelta
@@ -45,6 +46,40 @@ def _extract_verdict_type(output_text: str) -> str:
     return "UNKNOWN"
 
 
+def query_kwargs(project_id: str, since: datetime, fetch_cap: int) -> dict:
+    """SmithDB run-query arguments for one project window.
+
+    ``runs.query`` returns only ``id`` unless ``selects`` names the other
+    fields, and it defaults to the last 24 hours when ``min_start_time``
+    is omitted. ``fetch_cap`` is the old ``limit * 3``.
+    """
+    if fetch_cap > 100:
+        page_size = min(fetch_cap, 1000)
+    else:
+        page_size = min(fetch_cap, 100)
+    return {
+        "project_ids": [str(project_id)],
+        "run_type": "CHAIN",
+        "min_start_time": since,
+        "page_size": page_size,
+        "selects": ["ID", "NAME", "INPUTS", "OUTPUTS", "RUN_TYPE", "START_TIME"],
+    }
+
+
+async def _fetch_runs(client, project_name: str, since: datetime, fetch_cap: int) -> list:
+    if hasattr(client, "aread_project"):
+        project = await client.aread_project(project_name=project_name)
+    else:
+        project = client.read_project(project_name=project_name)
+    kwargs = query_kwargs(str(project.id), since, fetch_cap)
+    runs = []
+    async for run in client.runs.query(**kwargs):
+        runs.append(run)
+        if len(runs) >= fetch_cap:
+            break
+    return runs
+
+
 def build_dataset(project_name: str = "primogreedy", limit: int = 50):
     client = _get_client()
 
@@ -64,14 +99,7 @@ def build_dataset(project_name: str = "primogreedy", limit: int = 50):
         print(f"Created new dataset: {dataset_name} (id={dataset.id})")
 
     since = datetime.utcnow() - timedelta(days=30)
-    runs = list(
-        client.list_runs(
-            project_name=project_name,
-            run_type="chain",
-            start_time=since,
-            limit=limit * 3,
-        )
-    )
+    runs = asyncio.run(_fetch_runs(client, project_name, since, limit * 3))
 
     if not runs:
         print(f"No runs found in project '{project_name}' in the last 30 days.")

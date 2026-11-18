@@ -52,6 +52,7 @@ jobs:
         run: |
           python tests/test_discovery_improvements.py
           python tests/test_value_improvements.py
+          python tests/test_online_eval.py
 
       - name: Run The Marathon
         env:

@@ -15,6 +15,8 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+_cached_session_id: str | None = None
+
 VALID_VERDICTS = {"STRONG BUY", "BUY", "WATCH", "AVOID"}
 
 REQUIRED_HEADERS = [
@@ -103,10 +105,26 @@ def log_online_feedback(
         _verdict_validity_score(verdict_text),
     ]
 
+    for ev in evals:
+        logger.info(
+            "Online eval [%s] %s: %.2f — %s",
+            ticker, ev["key"], ev["score"], ev["comment"],
+        )
+
+    if not run_id:
+        return
+
     try:
         from langsmith import Client
 
         client = Client()
+        session_id = _resolve_session_id(client)
+        if not session_id:
+            logger.warning(
+                "LangSmith feedback skipped for %s: project id was missing",
+                ticker,
+            )
+            return
 
         for ev in evals:
             client.create_feedback(
@@ -115,15 +133,11 @@ def log_online_feedback(
                 score=ev["score"],
                 comment=f"[{ticker}] {ev['comment']}",
                 source_info={"type": "online_eval", "ticker": ticker},
-            ) if run_id else None
-
-            logger.info(
-                "Online eval [%s] %s: %.2f — %s",
-                ticker, ev["key"], ev["score"], ev["comment"],
+                session_id=session_id,
             )
 
     except Exception as exc:
-        logger.debug("LangSmith feedback skipped: %s", exc)
+        logger.warning("LangSmith feedback skipped: %s", type(exc).__name__)
 
 
 def tag_for_review(
@@ -182,11 +196,35 @@ def tag_for_review(
         logger.debug("LangSmith annotation skipped: %s", exc)
 
 
-def get_current_run_id() -> str | None:
-    """Attempt to retrieve the current LangSmith run ID from callback context."""
+def _current_run_context() -> tuple[str | None, str | None]:
+    """Return the active LangSmith run id and project id, if a run is open."""
     try:
         from langsmith import get_current_run_tree
         rt = get_current_run_tree()
-        return str(rt.id) if rt else None
+        if not rt:
+            return None, None
+        run_id = str(rt.id) if rt.id else None
+        session = getattr(rt, "session_id", None)
+        session_id = str(session) if session else None
+        return run_id, session_id
     except Exception:
-        return None
+        return None, None
+
+
+def _resolve_session_id(client) -> str | None:
+    """Project UUID for feedback. Prefer the open run, then the named project."""
+    global _cached_session_id
+    _, session_id = _current_run_context()
+    if session_id:
+        return session_id
+    if _cached_session_id:
+        return _cached_session_id
+    project_name = os.getenv("LANGCHAIN_PROJECT") or "primogreedy"
+    project = client.read_project(project_name=project_name)
+    _cached_session_id = str(project.id)
+    return _cached_session_id
+
+
+def get_current_run_id() -> str | None:
+    """Attempt to retrieve the current LangSmith run ID from callback context."""
+    return _current_run_context()[0]
