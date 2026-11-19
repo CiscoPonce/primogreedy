@@ -37,15 +37,15 @@ logger = get_logger(__name__)
 # 2026-10-12 benchmark showed returning empty/truncated completions and
 # rate-limiting constantly. Ultra-550B is the strongest free reasoner.
 PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
-# VPS probe on 2026-11-19: Super VL, ERNIE, and Flint returned a correct
-# AVOID in the message body. Gemma was refused, Lightning came back empty,
-# and the router was slow and empty during the morning hunt.
+# A full-size bull case on 2026-11-19 left Super VL's message body empty
+# until the ask was exactly three sentences. ERNIE wrote that bear case
+# in the body, so it goes first. Super VL and Flint are the backups.
 SKEPTIC_MODEL = os.getenv(
     "DEBATE_SKEPTIC_MODEL",
-    "nvidia/nemotron-3.5-super-vl:free",
+    "baidu/ernie-5.5-flash-preview:free",
 )
 SKEPTIC_BACKUPS = (
-    "baidu/ernie-5.5-flash-preview:free",
+    "nvidia/nemotron-3.5-super-vl:free",
     "recursive/flint-v1.0:free",
 )
 # Judge is the structured-output role; default to the dedicated JSON model so
@@ -317,13 +317,11 @@ def skeptic_node(state: DebateState) -> dict:
 
     prompt += (
         f"BULL CASE TO CHALLENGE:\n{bull_case[:3000]}\n\n"
-        "Your job:\n"
-        "1. Use ONLY the provided data — if a claim has no evidence in the data, "
-        "call it out as FABRICATED\n"
-        "2. Identify the biggest risk to an investor\n"
-        "3. Point out any math errors or unsupported assumptions\n"
-        "4. State what specific evidence would prove the bear case right\n\n"
-        "Be thorough but concise."
+        "Write exactly 3 sentences.\n"
+        "1. Name any claim that is not in the data and call it FABRICATED.\n"
+        "2. Name the debt breach and the liquidity breach with the numbers above.\n"
+        "3. State the one fact that would prove this bear case wrong.\n"
+        "Do not add a title or a list."
     )
 
     bear_case = _resilient_llm_call(SKEPTIC_MODEL, prompt, _fallback_for(SKEPTIC_MODEL))
