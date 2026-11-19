@@ -77,7 +77,7 @@ START --> [pitcher (Nemotron Ultra 550B)] --> [skeptic (Gemma 4 31B)] --> [judge
 
 **Free models (OpenRouter `:free` tier, dynamically verified at runtime)**:
 - **Pitcher**: `nvidia/nemotron-3-ultra-550b-a55b:free` (also default `STRUCTURED_MODEL` and head of `MODEL_CHAIN`)
-- **Skeptic**: `openrouter/free`, then Lightning, then Gemma. Gemma's shared pool can refuse a whole hunt, so it is no longer the first skeptic.
+- **Skeptic**: `nvidia/nemotron-3.5-super-vl:free`, then `baidu/ernie-5.5-flash-preview:free`, then `recursive/flint-v1.0:free`. A 2026-11-19 VPS probe showed these three return a real answer. Gemma was refused, Lightning came back empty, and the router was slow.
 - **Judge**: `dots-studio/dots-3-note-preview:free` (dedicated JSON role)
 - **Fallback chain (`MODEL_CHAIN` in `src/llm.py`)**: `nemotron-3-ultra-550b-a55b:free` → `gemma-4-31b-it:free` → `dots-3-note-preview:free` → `nvidia/nemotron-3.5-lightning:free` → `openrouter/free` router catch-all
 - **Structured chain (`STRUCTURED_CHAIN`)**: walks `nemotron-3-ultra-550b-a55b:free` → `gemma-4-31b-it:free` → `dots-3-note-preview:free` → `openrouter/free` so framework fields survive rate limits.

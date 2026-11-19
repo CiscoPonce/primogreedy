@@ -37,9 +37,17 @@ logger = get_logger(__name__)
 # 2026-10-12 benchmark showed returning empty/truncated completions and
 # rate-limiting constantly. Ultra-550B is the strongest free reasoner.
 PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
-# Gemma's free pool is a shared upstream limit. Spacing cannot clear it, so
-# the skeptic starts on the OpenRouter router and only then tries a fixed model.
-SKEPTIC_MODEL = os.getenv("DEBATE_SKEPTIC_MODEL", "openrouter/free")
+# VPS probe on 2026-11-19: Super VL, ERNIE, and Flint returned a correct
+# AVOID in the message body. Gemma was refused, Lightning came back empty,
+# and the router was slow and empty during the morning hunt.
+SKEPTIC_MODEL = os.getenv(
+    "DEBATE_SKEPTIC_MODEL",
+    "nvidia/nemotron-3.5-super-vl:free",
+)
+SKEPTIC_BACKUPS = (
+    "baidu/ernie-5.5-flash-preview:free",
+    "recursive/flint-v1.0:free",
+)
 # Judge is the structured-output role; default to the dedicated JSON model so
 # it stays DISTINCT from pitcher and skeptic.  _judge_model_chain() falls back
 # through MODEL_CHAIN if it is rate-limited.
@@ -77,15 +85,26 @@ def _backup_candidates(primary: str) -> list[str]:
     return out
 
 
+def _call_chain(primary: str) -> list[str]:
+    """Primary plus two backups. The debate used to die after the second.
+
+    The skeptic uses the three models that answered on the VPS probe.
+    Other roles keep the general free-model backups.
+    """
+    if primary == SKEPTIC_MODEL:
+        chain = [primary]
+        reserved = {PITCHER_MODEL, JUDGE_MODEL}
+        for model in SKEPTIC_BACKUPS:
+            if model not in chain and model not in reserved:
+                chain.append(model)
+        return chain[:3]
+    return [primary] + _backup_candidates(primary)[:2]
+
+
 def _fallback_for(primary: str) -> str:
     """First backup for ``primary``. Kept for callers that want one model."""
-    chain = _backup_candidates(primary)
-    return chain[0] if chain else primary
-
-
-def _call_chain(primary: str) -> list[str]:
-    """Primary plus two backups. The debate used to die after the second."""
-    return [primary] + _backup_candidates(primary)[:2]
+    chain = _call_chain(primary)
+    return chain[1] if len(chain) > 1 else primary
 
 
 class DebateState(TypedDict, total=False):
