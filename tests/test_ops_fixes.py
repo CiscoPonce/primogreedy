@@ -126,18 +126,18 @@ skeptic_fb = debate._fallback_for(debate.SKEPTIC_MODEL)
 pitcher_fb = debate._fallback_for(debate.PITCHER_MODEL)
 skeptic_chain = debate._call_chain(debate.SKEPTIC_MODEL)
 check(
-    "skeptic starts on ERNIE",
-    debate.SKEPTIC_MODEL == "baidu/ernie-5.5-flash-preview:free",
+    "skeptic starts on Flint",
+    debate.SKEPTIC_MODEL == "recursive/flint-v1.0:free",
     debate.SKEPTIC_MODEL,
 )
 check("skeptic backup is not the pitcher", skeptic_fb != pitcher, skeptic_fb)
 check("pitcher backup is not the skeptic", pitcher_fb != debate.SKEPTIC_MODEL, pitcher_fb)
 check(
-    "skeptic chain is ERNIE, Super VL, Flint",
+    "skeptic chain is Flint, ERNIE, Super VL",
     skeptic_chain == [
+        "recursive/flint-v1.0:free",
         "baidu/ernie-5.5-flash-preview:free",
         "nvidia/nemotron-3.5-super-vl:free",
-        "recursive/flint-v1.0:free",
     ],
     skeptic_chain,
 )

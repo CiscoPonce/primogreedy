@@ -7,7 +7,7 @@ on:
       limit:
         description: 'Max US tickers to re-evaluate (0 = all)'
         required: false
-        default: '0'
+        default: '10'
   # Also runs daily at 14:00 UTC (after market open)
   schedule:
     - cron: '0 14 * * 1-5'
@@ -70,5 +70,5 @@ jobs:
           RESEND_API_KEY_CISCO: ${{ secrets.RESEND_API_KEY_CISCO }}
           EMAIL_CISCO: ${{ secrets.EMAIL_CISCO }}
         run: |
-          LIMIT="${{ github.event.inputs.limit || '0' }}"
-          PYTHONPATH=. python src/reeval_portfolio.py --limit "$LIMIT"
+          LIMIT="${{ github.event.inputs.limit || '10' }}"
+          PYTHONPATH=. python src/reeval_portfolio.py --limit "$LIMIT" --max-minutes 48

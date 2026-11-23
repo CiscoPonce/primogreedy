@@ -286,6 +286,19 @@ try:
 finally:
     llm_mod._live_free_models = _orig_live
 
+import src.reeval_portfolio as reeval_mod
+_sample_trades = [{"ticker": "AAA"}, {"ticker": "BBB"}, {"ticker": "CCC"}]
+_filtered_trades = reeval_mod._filter_recent_reeval(_sample_trades, {"BBB"})
+check(
+    "reeval cooldown excludes recent tickers",
+    [t["ticker"] for t in _filtered_trades] == ["AAA", "CCC"],
+    _filtered_trades,
+)
+check(
+    "reeval cooldown no-op when empty set",
+    len(reeval_mod._filter_recent_reeval(_sample_trades, set())) == 3,
+)
+
 # ---------------------------------------------------------------------------
 print("\n========================================")
 print(f"RESULT: {PASSED} passed, {FAILED} failed")

@@ -14,7 +14,7 @@ import re
 import sys
 import time
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -79,6 +79,38 @@ def fetch_us_tickers() -> list[dict]:
             if ticker not in seen or trade["date"] > seen[ticker]["date"]:
                 seen[ticker] = trade
     return list(seen.values())
+
+
+def _recent_reeval_tickers(cooldown_days: int) -> set[str]:
+    """Return tickers already re-evaluated via reeval_cron within cooldown_days."""
+    if cooldown_days <= 0 or not VPS_API_URL:
+        return set()
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=cooldown_days)
+    recent: set[str] = set()
+    try:
+        resp = requests.get(f"{VPS_API_URL}/analyses?limit=250", headers=_vps_headers(), timeout=15)
+        if not resp.ok:
+            return recent
+        for row in resp.json():
+            if row.get("source") != "reeval_cron":
+                continue
+            raw_ts = str(row.get("analyzed_at") or "").replace("T", " ").split(".")[0]
+            try:
+                ts = datetime.strptime(raw_ts, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            if ts >= cutoff and row.get("ticker"):
+                recent.add(row["ticker"])
+    except Exception as exc:
+        logger.debug("Recent reeval lookup failed (continuing without cooldown): %s", exc)
+    return recent
+
+
+def _filter_recent_reeval(trades: list[dict], recent: set[str]) -> list[dict]:
+    """Exclude tickers in ``recent`` so scheduled batches rotate through the portfolio."""
+    if not recent:
+        return trades
+    return [t for t in trades if t.get("ticker") not in recent]
 
 
 def _prioritize_trades_by_drawdown(trades: list[dict]) -> list[dict]:
@@ -315,17 +347,39 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Re-evaluate US tickers from VPS")
     parser.add_argument("--limit", type=int, default=0, help="Max tickers (0 = all)")
+    parser.add_argument(
+        "--cooldown-days",
+        type=int,
+        default=int(os.getenv("REEVAL_COOLDOWN_DAYS", "7")),
+        help="Skip tickers already re-evaluated within this many days (0 = disable)",
+    )
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=float(os.getenv("REEVAL_MAX_MINUTES", "48")),
+        help="Soft wall-clock budget before finalizing and emailing (0 = unlimited)",
+    )
     args = parser.parse_args()
 
     logger.info("=" * 60)
     logger.info("PrimoGreedy — Portfolio Re-Evaluation")
-    logger.info("Alpaca: %s | Debate: %s", os.getenv("ALPACA_ENABLED", "false"),
-                os.getenv("USE_DEBATE", "false"))
+    logger.info("Alpaca: %s | Debate: %s | Cooldown: %dd | Budget: %.0fm",
+                os.getenv("ALPACA_ENABLED", "false"),
+                os.getenv("USE_DEBATE", "false"),
+                args.cooldown_days,
+                args.max_minutes)
     logger.info("=" * 60)
 
-    trades = _prioritize_trades_by_drawdown(fetch_us_tickers())
+    all_trades = fetch_us_tickers()
+    recent = _recent_reeval_tickers(args.cooldown_days)
+    filtered = _filter_recent_reeval(all_trades, recent)
+    if recent:
+        logger.info("Skipped %d recently re-evaluated tickers (%dd cooldown); %d remaining",
+                    len(all_trades) - len(filtered), args.cooldown_days, len(filtered))
+
+    trades = _prioritize_trades_by_drawdown(filtered)
     if not trades:
-        logger.info("No US tickers found in VPS portfolio.")
+        logger.info("No US tickers due for re-evaluation.")
         return
 
     if args.limit > 0:
@@ -334,8 +388,17 @@ def main():
     logger.info("Re-evaluating %d US tickers", len(trades))
 
     results = []
+    started_at = time.monotonic()
 
     for i, trade in enumerate(trades, 1):
+        elapsed_min = (time.monotonic() - started_at) / 60.0
+        if args.max_minutes > 0 and elapsed_min >= args.max_minutes:
+            logger.warning(
+                "Soft time budget reached (%.1f >= %.1f min) after %d/%d tickers; "
+                "finalizing partial batch cleanly.",
+                elapsed_min, args.max_minutes, i - 1, len(trades),
+            )
+            break
         ticker = trade["ticker"]
         old_verdict = trade["verdict"]
         logger.info("[%d/%d] %s (old: %s, entry: $%.2f)",

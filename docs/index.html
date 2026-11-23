@@ -578,9 +578,9 @@
         <div class="model-note">Strongest free reasoner. Default <code>STRUCTURED_MODEL</code>, head of <code>MODEL_CHAIN</code> &amp; <code>STRUCTURED_CHAIN</code>, and default <em>Pitcher</em> in committee debate.</div>
       </div>
       <div class="model-card p2">
-        <div class="model-role">Adversarial Skeptic &amp; Stage 2</div>
-        <div class="model-name">google/gemma-4-31b-it:free</div>
-        <div class="model-note">Replaced the retired Nemotron Super slug. Serves as the default <em>Skeptic</em> challenging bull assumptions and Stage-2 fallback in both chains.</div>
+        <div class="model-role">Adversarial Skeptic &amp; Stage-2 Fallback</div>
+        <div class="model-name">recursive/flint-v1.0:free &amp; google/gemma-4-31b-it:free</div>
+        <div class="model-note"><code>flint-v1.0</code> leads the 3-model <em>Skeptic</em> chain (backed by ERNIE &amp; Super VL), while <code>gemma-4-31b-it</code> serves as Stage-2 fallback in <code>MODEL_CHAIN</code> and <code>STRUCTURED_CHAIN</code>.</div>
       </div>
       <div class="model-card p3">
         <div class="model-role">Dedicated JSON Judge</div>

@@ -37,16 +37,16 @@ logger = get_logger(__name__)
 # 2026-10-12 benchmark showed returning empty/truncated completions and
 # rate-limiting constantly. Ultra-550B is the strongest free reasoner.
 PITCHER_MODEL = os.getenv("DEBATE_PITCHER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
-# A full-size bull case on 2026-11-19 left Super VL's message body empty
-# until the ask was exactly three sentences. ERNIE wrote that bear case
-# in the body, so it goes first. Super VL and Flint are the backups.
+# A full-size bull case left ERNIE and Super VL returning empty bodies in live
+# November runs while Flint delivered bear cases reliably on the first try.
+# Put Flint first and keep ERNIE / Super VL as backups to avoid ~90s retry churn.
 SKEPTIC_MODEL = os.getenv(
     "DEBATE_SKEPTIC_MODEL",
-    "baidu/ernie-5.5-flash-preview:free",
+    "recursive/flint-v1.0:free",
 )
 SKEPTIC_BACKUPS = (
+    "baidu/ernie-5.5-flash-preview:free",
     "nvidia/nemotron-3.5-super-vl:free",
-    "recursive/flint-v1.0:free",
 )
 # Judge is the structured-output role; default to the dedicated JSON model so
 # it stays DISTINCT from pitcher and skeptic.  _judge_model_chain() falls back
