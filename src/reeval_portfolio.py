@@ -382,19 +382,20 @@ def main():
         logger.info("No US tickers due for re-evaluation.")
         return
 
-    if args.limit > 0:
-        trades = trades[:args.limit]
-
-    logger.info("Re-evaluating %d US tickers", len(trades))
+    logger.info("Re-evaluating up to %s of %d eligible US tickers",
+                args.limit if args.limit > 0 else "all", len(trades))
 
     results = []
+    evaluated = 0
     started_at = time.monotonic()
 
     for i, trade in enumerate(trades, 1):
+        if args.limit > 0 and evaluated >= args.limit:
+            break
         elapsed_min = (time.monotonic() - started_at) / 60.0
         if args.max_minutes > 0 and elapsed_min >= args.max_minutes:
             logger.warning(
-                "Soft time budget reached (%.1f >= %.1f min) after %d/%d tickers; "
+                "Soft time budget reached (%.1f >= %.1f min) after %d/%d candidates; "
                 "finalizing partial batch cleanly.",
                 elapsed_min, args.max_minutes, i - 1, len(trades),
             )
@@ -428,6 +429,7 @@ def main():
             continue
 
         # Analyst
+        evaluated += 1
         analysis = analyse_ticker(ticker, name, info)
         if not analysis:
             results.append({"ticker": ticker, "old": old_verdict, "new": "ERROR", "reason": "LLM failed"})
@@ -480,7 +482,7 @@ def main():
             "structured": analysis.get("structured"),
         })
 
-        if i < len(trades):
+        if i < len(trades) and not (args.limit > 0 and evaluated >= args.limit):
             time.sleep(15)  # respect free-tier 8 req/min limits
 
     # --- Summary ---
