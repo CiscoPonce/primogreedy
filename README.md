@@ -165,7 +165,7 @@ The agent (`src/core/memory.py`, `src/portfolio_tracker.py`, `src/discovery/scor
 ### Closed-Loop Attribution & Drawdown Re-Evaluation (`src/discovery/scoring.py`, `src/prompts/senior_broker.py`, `src/reeval_portfolio.py`)
 - **Attribution-weighted scoring**: Once `/portfolio/attribution` reports at least 5 priced positions, `score_candidate()` applies a bounded `-6` to `+6` score adjustment (`_attribution_adjustment()`) favoring historically strong setups and penalizing underperforming buckets.
 - **Prompt calibration**: `get_attribution_lessons()` appends concise recent portfolio win/loss calibration context inside `get_analyst_prompt()`.
-- **Drawdown-prioritized re-evaluation**: Weekday re-eval (`src/reeval_portfolio.py`) excludes `delisted` positions and sorts steep drawdowns (`gain_pct <= -25%`, then `>= +50%` gainers) via `_prioritize_trades_by_drawdown()` before applying `--limit`.
+- **Drawdown-prioritized re-evaluation**: Weekday re-eval (`src/reeval_portfolio.py`) excludes `delisted` positions and tickers already re-evaluated within the last 7 days (`--cooldown-days`, via `_recent_reeval_tickers()` / `_filter_recent_reeval()`), prioritizes steep drawdowns (`gain_pct <= -25%`, then `>= +50%` gainers) via `_prioritize_trades_by_drawdown()`, skips shrunk sub-`$5M` holdings without burning `--limit` slots (`10` evaluated tickers/run in `.github/workflows/reeval.yml`), and enforces a `48m` soft wall-clock budget (`--max-minutes`) so runs finish and email cleanly before GitHub's `60m` timeout.
 
 ### Catalyst Polling Daemon (`vps/catalyst_poll.py`)
 VPS-based systemd timer that polls every 15 minutes during US market hours for intraday triggers:
@@ -277,6 +277,8 @@ python3 main.py
 ```bash
 PYTHONPATH=. python tests/test_discovery_improvements.py
 PYTHONPATH=. python tests/test_value_improvements.py
+PYTHONPATH=. python tests/test_online_eval.py
+PYTHONPATH=. python tests/test_ops_fixes.py
 ```
 
 ### 6. Deploying the VPS API (optional)
@@ -343,8 +345,10 @@ primogreedy/
 │   └── prompts/
 │       └── senior_broker.py        # LangSmith Hub prompt + attribution calibration lessons
 ├── tests/
-│   ├── test_discovery_improvements.py # Screener, attribution, and model filter tests (35 assertions)
-│   └── test_value_improvements.py     # Valuation, currency, and Kelly sizing tests (46 assertions)
+│   ├── test_discovery_improvements.py # Screener, attribution, model filter & cooldown tests (37 assertions)
+│   ├── test_value_improvements.py     # Valuation, currency, and Kelly sizing tests (46 assertions)
+│   ├── test_online_eval.py            # Inline LangSmith feedback & SmithDB tests (15 assertions)
+│   └── test_ops_fixes.py              # Finnhub 429 retry, HTTPS fallback & debate routing tests (20 assertions)
 ├── docs/
 │   └── index.html                  # Project showcase website (primoinvesting.com)
 ├── scripts/

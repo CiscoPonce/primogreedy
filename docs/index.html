@@ -377,7 +377,7 @@
     <div class="hero-stat"><div class="num">4</div><div class="label">Global Markets</div></div>
     <div class="hero-stat"><div class="num">5-Stage</div><div class="label">Live Free Chain</div></div>
     <div class="hero-stat"><div class="num">7</div><div class="label">LangSmith Evaluators</div></div>
-    <div class="hero-stat"><div class="num">152</div><div class="label">Automated Tests</div></div>
+    <div class="hero-stat"><div class="num">189</div><div class="label">Automated Tests</div></div>
   </div>
   <div class="scroll-hint">Scroll to explore ↓</div>
 </section>
@@ -775,7 +775,7 @@
           <li><strong>Liquidity &amp; quality gates:</strong> min avg volume, min dollar volume, price floor, exchange allow-lists, short-float cap, and a pump/blow-off guard run before the expensive analyst step</li>
           <li><strong>Insider buying in scoring:</strong> SEC Form 4 net-buying now feeds candidate ranking (+20 large net buys, +12 otherwise, −5 net selling), cached per run</li>
           <li><strong>SEC EDGAR fix:</strong> ticker→CIK resolution + submissions API replaces the ignored <code>tickers=</code> EFTS filter; section extraction now skips the table of contents and captures real MD&amp;A/Risk Factors prose</li>
-          <li><strong>Reliability net:</strong> <code>tests/test_discovery_improvements.py</code> (35 assertions) and <code>tests/test_value_improvements.py</code> (46 assertions) run in CI before every hunt. Requires <code>yfinance&gt;=1.6</code>, guarded so older versions fall back to the seed pool</li>
+          <li><strong>Reliability net:</strong> <code>tests/test_discovery_improvements.py</code> (37 assertions), <code>test_value_improvements.py</code> (46), <code>test_online_eval.py</code> (15), and <code>test_ops_fixes.py</code> (20) run in CI before every hunt. Requires <code>yfinance&gt;=1.6</code>, guarded so older versions fall back to the seed pool</li>
         </ul>
       </div>
 
@@ -785,8 +785,8 @@
         <ul>
           <li><strong>Attribution-weighted discovery &amp; prompts:</strong> <code>/portfolio/attribution</code> tracks performance by verdict, sector, and region; once <code>≥ 5</code> priced positions exist, <code>score_candidate()</code> applies a bounded <code>−6..+6</code> bias and <code>get_attribution_lessons()</code> calibrates the analyst prompt</li>
           <li><strong>Closed-position archive &amp; benchmarks:</strong> <code>CLOSE</code> accepts archive paper trades into <code>closed_positions</code> with realized <code>exit_price</code> and <code>gain_pct</code>; <code>/portfolio/attribution</code> and the VPS dashboard benchmark against <code>IWM</code> and <code>SPY</code></li>
-          <li><strong>Drawdown-prioritized re-evaluation:</strong> weekday re-eval (<code>src/reeval_portfolio.py</code>) skips <code>delisted</code> tickers and inspects <code>gain_pct ≤ −25%</code> (followed by <code>≥ +50%</code>) before slicing <code>--limit</code></li>
-          <li><strong>Self-healing free model routing &amp; HF sync:</strong> replaced retired Nemotron Super with <code>google/gemma-4-31b-it:free</code>, added 1h live OpenRouter <code>/api/v1/models</code> <code>:free</code> filtering, automated Space sync via <code>.github/workflows/sync-hf.yml</code>, and expanded VPS API tests to 71 passing checks</li>
+          <li><strong>Bounded, rotating re-evaluation:</strong> weekday re-eval (<code>src/reeval_portfolio.py</code>) skips <code>delisted</code> and 7-day cooled-down tickers, prioritizes <code>gain_pct ≤ −25%</code> (followed by <code>≥ +50%</code>), filters sub-$5M gatekeeper skips without wasting <code>--limit 10</code> slots, and honors a <code>48m</code> soft time budget so summary emails always send</li>
+          <li><strong>Self-healing free model routing &amp; HF sync:</strong> <code>recursive/flint-v1.0:free</code> leads the 3-model Skeptic chain (with ERNIE &amp; Super VL backups), <code>_live_free_models()</code> filters OpenRouter <code>/api/v1/models</code> hourly, <code>.github/workflows/sync-hf.yml</code> auto-syncs the HF Space, and VPS API tests total 71 passing checks</li>
         </ul>
       </div>
 
